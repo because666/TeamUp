@@ -28,8 +28,10 @@
 | Task ID | Owner | Area | Status | Working location | Record |
 | --- | --- | --- | --- | --- | --- |
 | TUP-20260810-docs-baseline | 角色 A | 文档、AI 协作与推荐策略基线 | Ready for Review | `role-a/docs/TUP-20260810-docs-baseline` | [任务记录](tasks/TUP-20260810-docs-baseline.md) |
+| TUP-20260810-role-b-review | 角色 B | 文档、后端可行性、安全与协作规则核对 | Pending | `origin/role-a/docs/TUP-20260810-docs-baseline` | [评审记录](reviews/TUP-20260810-role-b-review.md) |
+| TUP-20260810-role-a-product-foundation | 角色 A | 用户流程、信息架构与页面状态规范 | Ready to Start | `role-a/docs/TUP-20260810-role-a-product-foundation` | [任务记录](tasks/TUP-20260810-role-a-product-foundation.md) |
 
-角色 B 当前没有登记中的任务。开始开发前必须新建独立任务文件和分支。
+角色 A 的产品基础任务可以与角色 B 的技术基线评审并行；双方不得修改对方的任务文件或高冲突契约。
 
 ## 4. 关键决策
 
@@ -48,11 +50,11 @@
 
 ## 6. 下一步建议顺序
 
-1. 角色 A、B 评审并接受/修改 ADR-0003，先统一协作规则。
-2. 角色 B 主导确认 ADR-0001，初始化后端工程和真实命令。
-3. 双方按 ADR-0002 评审推荐事件、特征 schema 和模型上线门槛。
-4. 双方按 API 契约确定首条纵向切片：登录 -> 名片 -> 项目发布。
-5. 建立 CI、测试数据库和 staging 后再并行扩展匹配与沟通。
+1. 角色 A 通过 QQ 通知角色 B 按评审文件核对；结论必须回写仓库，PR 可选。
+2. 角色 A 启动产品基础任务，先完成登录 -> 名片 -> 项目发布的流程、页面和契约映射，不锁定工程工具链。
+3. 角色 B 主导确认 ADR-0001，再初始化后端工程和真实命令。
+4. 双方按 ADR-0002 评审推荐事件、特征 schema 和模型上线门槛。
+5. 契约评审通过后再建立 CI、测试数据库和 staging，并行扩展匹配与沟通。
 
 ## 7. 更新规则
 

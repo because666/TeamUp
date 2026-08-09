@@ -68,13 +68,17 @@
 ```text
 main/CURRENT.md           = 已合并状态快照
 feature/task-file.md      = 单个任务的实时状态，由唯一负责人编辑
+docs/status/reviews/*.md  = 跨角色评审结论与集成依据
 docs/decisions/*.md       = 跨会话长期决策
 API/OpenAPI + DATA_MODEL  = 前后端共享契约
-Git commit/PR             = 可复现的实现与评审记录
-聊天消息                  = 临时沟通，不是项目真值
+Git commit                = 可复现的实现记录
+Pull Request              = 可选的网页评审载体
+QQ/聊天消息               = 通知渠道，不是项目真值
 ```
 
 禁止让两个 AI 同时更新同一个任务文件或共享契约。需要并行时拆分为不同文件/模块，并指定一个集成任务。
+
+跨角色评审必须填写独立评审文件。评审人可以只修改该文件；如果通过 QQ 返回，必须发送可原样写入评审文件的完整 Markdown，而不是只回复“没问题”。任务负责人将内容据实落盘后，才可按评审结论推进集成。
 
 ## 5. AI 必须停止并确认的情况
 
@@ -137,6 +141,6 @@ Git commit/PR             = 可复现的实现与评审记录
 
 ## 9. 规则维护
 
-根 `AGENTS.md` 只保留稳定、强制、跨模块规则。具体技术命令写到相应子目录 `AGENTS.md` 或开发文档。修改 AI 规则需要双方评审，并在 PR 中说明防止了什么实际风险。
+根 `AGENTS.md` 只保留稳定、强制、跨模块规则。具体技术命令写到相应子目录 `AGENTS.md` 或开发文档。修改 AI 规则需要双方评审，并在仓库评审记录中说明防止了什么实际风险；使用 PR 时同时引用该记录。
 
 官方 Codex 指令发现规则：<https://learn.chatgpt.com/docs/agent-configuration/agents-md>。

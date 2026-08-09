@@ -17,7 +17,7 @@
 - 产品、MVP、架构、API、数据、匹配、开发、测试、发布和安全文档；
 - ADR 索引与三个初始决策；
 - `CURRENT.md`、每任务状态文件和交接模板；
-- GitHub PR 模板与 `.github` AI 规则；
+- 可选 GitHub PR 模板与 `.github` AI 规则；
 - 规则算法冷启动、自训练轻量模型、数据闭环和模型发布规范。
 
 ## 3. 非目标
@@ -43,28 +43,29 @@
 
 ## 5. 当前状态
 
-角色 A 已确认自训练轻量推荐模型方向。文档、契约和校验已完成，远程任务分支已上传，等待角色 B 评审。
+角色 A 已确认自训练轻量推荐模型方向。文档、契约和校验已完成，远程任务分支已上传；角色 B 的核对范围和输出格式已写入独立评审文件，等待 QQ 通知后评审。
 
 ## 6. 验证记录
 
 | Check | Result | Evidence |
 | --- | --- | --- |
 | 文件存在与 Git 状态 | Passed | 已检查根文件与 `docs/` 创建状态 |
-| Markdown 相对链接 | Passed | 32 份 Markdown 的本地相对链接全部存在 |
-| AGENTS 指令大小 | Passed | root + docs 为 8,209 bytes；root + .github 为 7,735 bytes，低于 32,768 bytes |
+| Markdown 相对链接 | Passed | 34 份 Markdown 的本地相对链接全部存在 |
+| AGENTS 指令大小 | Passed | root + docs 为 8,769 bytes；root + .github 为 8,340 bytes，低于 32,768 bytes |
 | 敏感信息扫描 | Passed | 常见 API Key、云密钥、私钥和赋值模式无命中 |
 | Git diff 检查 | Passed | 无 whitespace error；当前位于规范任务分支 |
 | 推荐术语一致性 | Passed | 无旧 `ruleVersion`、大模型打分或未决 AI 范围表述残留 |
+| PR 可选流程一致性 | Passed | 旧“必须 PR”表述已替换；QQ 仅通知、仓库评审文件为集成依据 |
 | 远程同步 | Passed | [任务分支](https://github.com/because666/TeamUp/tree/role-a/docs/TUP-20260810-docs-baseline) 已建立并配置 upstream |
 
 ## 7. 待评审重点
 
 - 角色 B 评审推荐事件、特征 schema、训练/推理方案和数据安全；
 - 匹配 V0.1 权重、资料缺失和低置信度处理；
-- Git rebase/PR 合并顺序是否符合双方习惯；
+- Git 同步、文件评审和集成顺序是否符合双方习惯；
 - 安全治理功能是否纳入 P0；
 - 文档状态从 Proposed 转为 Confirmed/Accepted 的批准方式。
 
 ## 8. 下一步
 
-创建 Pull Request，由角色 B 对 ADR、协作规则和技术文档进行评审。评审结论应直接更新对应 ADR 状态及内容，批准后再合并 `main`。
+角色 A 通过 QQ 通知角色 B 按 [评审任务](../reviews/TUP-20260810-role-b-review.md) 核对。角色 B 的结论必须写入该文件或以可原样落盘的 Markdown 返回；批准后再集成到 `main`，无需创建 Pull Request。

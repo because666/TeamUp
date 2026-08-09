@@ -52,6 +52,7 @@
 - [ADR 索引](decisions/README.md)：已接受和待确认的关键决策。
 - [当前状态](status/CURRENT.md)：`main` 分支唯一聚合状态。
 - [任务目录](status/tasks/README.md)：各分支独立任务状态。
+- [角色 B 文档与技术基线评审](status/reviews/TUP-20260810-role-b-review.md)：无需 PR 的核对范围、Codex 提示词和结论模板。
 - [任务模板](status/templates/TASK_TEMPLATE.md)、[交接模板](status/templates/HANDOFF_TEMPLATE.md) 和 [模型发布模板](status/templates/MODEL_RELEASE_TEMPLATE.md)。
 
 ## 历史来源

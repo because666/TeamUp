@@ -18,3 +18,8 @@
 当前任务：
 
 - [TUP-20260810-docs-baseline](TUP-20260810-docs-baseline.md)
+- [TUP-20260810-role-a-product-foundation](TUP-20260810-role-a-product-foundation.md)
+
+跨角色评审：
+
+- [TUP-20260810-role-b-review](../reviews/TUP-20260810-role-b-review.md)
