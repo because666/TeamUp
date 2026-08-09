@@ -29,7 +29,7 @@
 | --- | --- | --- | --- | --- | --- |
 | TUP-20260810-docs-baseline | 角色 A | 文档、AI 协作与推荐策略基线 | Ready for Review | `role-a/docs/TUP-20260810-docs-baseline` | [任务记录](tasks/TUP-20260810-docs-baseline.md) |
 | TUP-20260810-role-b-review | 角色 B | 文档、后端可行性、安全与协作规则核对 | Pending | `origin/role-a/docs/TUP-20260810-docs-baseline` | [评审记录](reviews/TUP-20260810-role-b-review.md) |
-| TUP-20260810-role-a-product-foundation | 角色 A | 用户流程、信息架构与页面状态规范 | Ready to Start | `role-a/docs/TUP-20260810-role-a-product-foundation` | [任务记录](tasks/TUP-20260810-role-a-product-foundation.md) |
+| TUP-20260810-role-a-product-foundation | 角色 A | 用户流程、信息架构与页面状态规范 | Ready for Review | `role-a/docs/TUP-20260810-role-a-product-foundation` | [任务记录](tasks/TUP-20260810-role-a-product-foundation.md) |
 
 角色 A 的产品基础任务可以与角色 B 的技术基线评审并行；双方不得修改对方的任务文件或高冲突契约。
 
