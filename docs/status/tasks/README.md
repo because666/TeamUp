@@ -23,3 +23,4 @@
 跨角色评审：
 
 - [TUP-20260810-role-b-review](../reviews/TUP-20260810-role-b-review.md)
+- [TUP-20260810-role-a-product-foundation-review](../reviews/TUP-20260810-role-a-product-foundation-review.md)

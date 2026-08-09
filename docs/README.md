@@ -26,6 +26,9 @@
 - [产品概要](product/PRODUCT_BRIEF.md)：定位、用户、价值和成功指标。
 - [产品需求文档](product/PRD.md)：功能编号、业务规则和验收标准。
 - [MVP 范围](product/MVP_SCOPE.md)：P0/P1、非目标和发布门槛。
+- [用户流程](product/USER_FLOWS.md)：首条 P0 纵向切片及失败、恢复和退出路径。
+- [信息架构](product/INFORMATION_ARCHITECTURE.md)：小程序导航、页面层级与权限可见性。
+- [页面与状态规范](product/SCREEN_SPEC.md)：页面字段、状态、契约映射和 `GAP-*` 清单。
 
 ## 架构
 
@@ -53,6 +56,7 @@
 - [当前状态](status/CURRENT.md)：`main` 分支唯一聚合状态。
 - [任务目录](status/tasks/README.md)：各分支独立任务状态。
 - [角色 B 文档与技术基线评审](status/reviews/TUP-20260810-role-b-review.md)：无需 PR 的核对范围、Codex 提示词和结论模板。
+- [角色 A 产品基础技术评审](status/reviews/TUP-20260810-role-a-product-foundation-review.md)：登录、名片与项目发布切片的 `GAP-*` 核对模板。
 - [任务模板](status/templates/TASK_TEMPLATE.md)、[交接模板](status/templates/HANDOFF_TEMPLATE.md) 和 [模型发布模板](status/templates/MODEL_RELEASE_TEMPLATE.md)。
 
 ## 历史来源

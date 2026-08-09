@@ -1,9 +1,9 @@
 # TUP-20260810-role-a-product-foundation：角色 A 产品基础
 
-> Status: Ready to Start<br>
+> Status: In Progress<br>
 > Owner: 角色 A<br>
 > Reviewer: 角色 B（接口、安全与技术可行性）<br>
-> Base Commit: `f968335`<br>
+> Base Commit: `0adcd4f`<br>
 > Branch: `role-a/docs/TUP-20260810-role-a-product-foundation`<br>
 > Last Updated: 2026-08-10
 
@@ -17,6 +17,7 @@
 - API：[API_CONTRACT.md](../../architecture/API_CONTRACT.md)
 - 数据：[DATA_MODEL.md](../../architecture/DATA_MODEL.md)
 - ADR：[ADR-0002](../../decisions/ADR-0002-mvp-ai-scope.md)
+- Review：[角色 A 产品基础技术评审](../reviews/TUP-20260810-role-a-product-foundation-review.md)
 
 ## 3. 范围与交付物
 
@@ -64,6 +65,7 @@
 | Date | Change | Reason |
 | --- | --- | --- |
 | 2026-08-10 | 创建任务并标记为可启动 | 工作不依赖后端框架决定，可与角色 B 的基线评审并行 |
+| 2026-08-10 | 从已推送的文档基线创建独立分支 | 开始角色 A 产品规范工作，不修改后端所有文件 |
 
 ## 9. 验证记录
 
@@ -73,7 +75,7 @@
 
 ## 10. 当前状态与下一步
 
-- 最后完成：任务边界、交付物、非目标和验收标准已登记。
+- 最后完成：任务边界、交付物、非目标和验收标准已登记；独立任务分支已创建。
 - 当前阻塞：无；接口和安全结论需在角色 B 评审后才能从提案转为确认。
 - 下一步：从当前文档基线创建任务分支，先编写 `USER_FLOWS.md`，再完成信息架构和页面规范。
-- 最后相关提交：`uncommitted`
+- 最后相关提交：`0adcd4f`（任务基线）
