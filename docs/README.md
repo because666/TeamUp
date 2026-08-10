@@ -16,6 +16,7 @@
 | 匹配或推荐模型 | `architecture/MATCHING.md`、`architecture/ML_RECOMMENDER.md`、`product/PRD.md`、相关 ADR |
 | 架构或依赖 | `architecture/ARCHITECTURE.md`、`decisions/README.md` |
 | 开发与 Git | `development/DEVELOPMENT.md`、`development/GIT_WORKFLOW.md` |
+| 前后端对接与联调 | `development/FRONTEND_BACKEND_INTEGRATION.md`、`architecture/API_CONTRACT.md`、`architecture/DATA_MODEL.md` |
 | 使用 Codex 开发 | `development/AI_WORKFLOW.md`、`status/templates/TASK_TEMPLATE.md` |
 | 测试或发布 | `development/TEST_STRATEGY.md`、`development/RELEASE_CHECKLIST.md` |
 | 登录、权限、隐私 | `security/SECURITY_AND_PRIVACY.md` |
@@ -39,6 +40,7 @@
 
 - [开发指南](development/DEVELOPMENT.md)：环境、命令登记和工程约定。
 - [Git 工作流](development/GIT_WORKFLOW.md)：双人分支、同步和冲突处理。
+- [前后端对接与联调指南](development/FRONTEND_BACKEND_INTEGRATION.md)：契约、mock、环境、联调、验收和 Fork 交付流程。
 - [AI 协作流程](development/AI_WORKFLOW.md)：Codex 任务协议和防越界规则。
 - [测试策略](development/TEST_STRATEGY.md)：测试层级和质量门槛。
 - [发布清单](development/RELEASE_CHECKLIST.md)：发布前、发布中和回滚检查。
@@ -53,6 +55,7 @@
 - [当前状态](status/CURRENT.md)：`main` 分支唯一聚合状态。
 - [任务目录](status/tasks/README.md)：各分支独立任务状态。
 - [角色 B 文档与技术基线评审](status/reviews/TUP-20260810-role-b-review.md)：无需 PR 的核对范围、Codex 提示词和结论模板。
+- [前后端对接指南角色 A 评审](status/reviews/TUP-20260810-role-a-frontend-integration-review.md)：角色 A 对页面、mock 和联调流程的核对范围与结论模板。
 - [任务模板](status/templates/TASK_TEMPLATE.md)、[交接模板](status/templates/HANDOFF_TEMPLATE.md) 和 [模型发布模板](status/templates/MODEL_RELEASE_TEMPLATE.md)。
 
 ## 历史来源
