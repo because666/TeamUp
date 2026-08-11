@@ -32,6 +32,7 @@
 | TUP-20260810-role-a-product-foundation | 角色 A | 用户流程、信息架构与页面状态规范 | Ready to Start | `role-a/docs/TUP-20260810-role-a-product-foundation` | [任务记录](tasks/TUP-20260810-role-a-product-foundation.md) |
 | TUP-20260810-backend-frontend-integration | 角色 B | 前后端契约、mock、联调与交付流程 | Proposed | `role-a/docs/TUP-20260810-role-a-product-backend` | [任务记录](tasks/TUP-20260810-backend-frontend-integration.md) |
 | TUP-20260811-fastapi-backend | 角色 B | FastAPI 框架决策、完整后端 PRD 与初始化准备 | Proposed | `role-b/docs/TUP-20260811-fastapi-backend` | [任务记录](tasks/TUP-20260811-fastapi-backend.md) |
+| TUP-20260811-match-v0-1 | 角色 B | 可解释规则匹配引擎与 golden tests | Ready for Review | `role-b/feature/TUP-20260811-match-v0-1` | [任务记录](tasks/TUP-20260811-match-v0-1.md) |
 
 角色 A 的产品基础任务可以与角色 B 的技术基线评审并行；双方不得修改对方的任务文件或高冲突契约。
 
