@@ -6,7 +6,7 @@
 
 ## 9. FastAPI 后端基础实现
 
-可运行后端位于 `services/api`。当前仅在 `local` 和 `test` 使用明确标注的内存存储；MySQL 适配器和迁移属于后续独立任务。
+可运行后端位于 `services/api`。`local` 和 `test` 可显式使用内存存储；MySQL 适配器与 Alembic 迁移已实现，`staging` 和 `production` 禁止使用内存存储。
 
 在 `services/api` 目录执行：
 
@@ -30,7 +30,7 @@ python -m compileall -q app tests
 
 ## 1. 当前说明
 
-后端工程已在 `services/api` 初始化并完成首条纵向验证；前端工程位于角色 A 的独立分支。后端基础命令已在本文件第 9 节记录，未实现的前端、MySQL 和完整生产部署命令仍保持 `TBD`，不得据此推断为已完成。
+后端工程已在 `services/api` 初始化，并完成内存与 MySQL 8.4.11 的纵向验证；前端工程位于角色 A 的独立分支。后端基础和数据库迁移命令已在本文件记录，未实现的前端和完整生产部署命令仍保持 `TBD`，不得据此推断为已完成。
 
 ## 2. 工具链登记
 
@@ -38,7 +38,7 @@ python -m compileall -q app tests
 | --- | --- | --- | --- | --- | --- | --- |
 | 小程序 | UniApp | `TBD` | `TBD` | `TBD` | `TBD` | TBD |
 | 后端 | FastAPI | `services/api/pyproject.toml` | `python -m pip install -e ".[test]"` | `python -m uvicorn app.main:app --host 127.0.0.1 --port 8000` | `python -m pytest` | Confirmed |
-| 数据库 | MySQL | `TBD` | `TBD` | `TBD` | `TBD` | TBD |
+| 数据库 | MySQL 8.0/8.4、SQLAlchemy、Alembic、PyMySQL | `ADR-0004`、`services/api/pyproject.toml` | 随后端依赖安装；MySQL 服务安装方式按环境确定 | `python -m alembic upgrade head` | `TEAMUP_TEST_MYSQL_URL` 配置后运行 `python -m pytest` | Confirmed |
 | API 契约 | OpenAPI | 后端清单/生成配置 | `TBD` | `TBD` | `TBD` | Proposed |
 
 版本必须由锁文件、wrapper 或明确的版本配置固定，不要只在聊天中约定。
@@ -111,3 +111,26 @@ Mock 必须与契约生成或受契约测试约束；禁止手写一套与真实
 - 常见错误与解决方式。
 
 所有命令必须在干净克隆中实际验证后才能写为可用。
+
+## 10. MySQL 持久化与迁移
+
+服务端配置：
+
+```powershell
+$env:TEAMUP_ENVIRONMENT = "local"
+$env:TEAMUP_STORE_BACKEND = "mysql"
+$env:TEAMUP_DATABASE_URL = "mysql+pymysql://<user>:<password>@<host>:3306/<database>?charset=utf8mb4"
+python -m alembic upgrade head
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+连接串只允许存在于服务端环境或密钥服务，不得提交、打印或传给前端。迁移前确认目标数据库和备份策略；`downgrade base` 只用于一次性测试数据库的回滚演练，不作为生产数据恢复方式。
+
+真实 MySQL 集成测试需要先对测试库执行 `python -m alembic upgrade head`，然后显式提供独立测试连接串：
+
+```powershell
+$env:TEAMUP_TEST_MYSQL_URL = "mysql+pymysql://<test-user>:<test-password>@<host>:3306/<test-database>?charset=utf8mb4"
+python -m pytest -ra
+```
+
+未配置 `TEAMUP_TEST_MYSQL_URL` 时，MySQL 专属测试会显示为 skipped；SQLite 仓储与迁移测试仍会执行，但不能替代真实 MySQL 验证。

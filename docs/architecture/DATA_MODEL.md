@@ -3,11 +3,26 @@
 > Status: Proposed<br>
 > Owner: 角色 B<br>
 > Reviewers: 角色 A<br>
-> Last Updated: 2026-08-10
+> Last Updated: 2026-08-11
 
 ## 基础实现状态
 
-首个 FastAPI 切片在 local/test 内存适配器中映射了 `User`、`Profile`、`Project` 和 `ProjectRole`。该适配器不构成生产持久化决策；进入 staging 或 production 前仍需完成 MySQL 表、约束、迁移和回滚验证。
+首个 FastAPI 切片保留 local/test 内存适配器，并按 [ADR-0004](../decisions/ADR-0004-mysql-data-access.md) 实现了 MySQL 8 持久化适配器。初始 Alembic 迁移已在 MySQL 8.4.11 验证 upgrade、downgrade 和再次 upgrade；当前只落地身份、会话、名片、项目及岗位，后续实体仍是 Proposed。
+
+首批已实现物理表：
+
+| 表 | 用途 | 关键约束 |
+| --- | --- | --- |
+| `users` | 内部用户与微信 subject | subject 唯一、状态检查 |
+| `sessions` | 平台会话 | 只存 SHA-256 token 摘要、过期与撤销时间、用户外键 |
+| `profiles` | 当前能力名片 | 用户主键/外键、版本与枚举检查 |
+| `profile_skills` | 有序名片技能 | `(user_id, position)` 主键 |
+| `profile_collaboration_scenarios` | 有序协作场景 | `(user_id, position)` 主键 |
+| `projects` | 项目主体 | owner 外键、状态/版本检查、列表索引 |
+| `project_roles` | 招募岗位 | 项目外键、岗位位置唯一、人数/时间/状态检查 |
+| `project_role_skills` | 有序岗位技能 | `(role_id, position)` 主键 |
+
+数据库时间以 UTC 秒精度写入，API 输出恢复为带 UTC 时区的时间。原始平台 token、微信 `session_key`、AppSecret 和数据库连接串不得进入业务表。
 
 ## 1. 设计原则
 

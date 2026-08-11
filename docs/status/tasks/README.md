@@ -22,6 +22,7 @@
 - [TUP-20260810-backend-frontend-integration](TUP-20260810-backend-frontend-integration.md)
 - [TUP-20260811-fastapi-backend](TUP-20260811-fastapi-backend.md)
 - [TUP-20260811-wechat-login](TUP-20260811-wechat-login.md)
+- [TUP-20260811-mysql-persistence](TUP-20260811-mysql-persistence.md)
 
 跨角色评审：
 
@@ -29,3 +30,4 @@
 - [TUP-20260810-role-a-frontend-integration-review](../reviews/TUP-20260810-role-a-frontend-integration-review.md)
 - [TUP-20260811-fastapi-backend-review](../reviews/TUP-20260811-fastapi-backend-review.md)
 - [TUP-20260811-wechat-login-review](../reviews/TUP-20260811-wechat-login-review.md)
+- [TUP-20260811-mysql-persistence-review](../reviews/TUP-20260811-mysql-persistence-review.md)

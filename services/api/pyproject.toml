@@ -12,6 +12,9 @@ dependencies = [
   "pydantic==2.13.3",
   "httpx==0.28.1",
   "uvicorn[standard]==0.46.0",
+  "SQLAlchemy==2.0.51",
+  "alembic==1.19.1",
+  "PyMySQL==1.2.0",
 ]
 
 [project.optional-dependencies]

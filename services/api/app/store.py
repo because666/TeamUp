@@ -2,6 +2,7 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from secrets import token_urlsafe
 from threading import RLock
+from typing import Protocol
 from uuid import uuid4
 
 from .errors import ServiceError
@@ -10,6 +11,21 @@ from .schemas import ProfileData, ProfilePayload, ProjectData, ProjectPayload, P
 
 def now_utc() -> datetime:
     return datetime.now(UTC)
+
+
+class Store(Protocol):
+    def login(self, subject: str) -> tuple[str, str, bool]: ...
+    def user_for_token(self, token: str) -> str: ...
+    def logout(self, token: str) -> None: ...
+    def get_profile(self, user_id: str) -> ProfileData | None: ...
+    def save_profile(self, user_id: str, payload: ProfilePayload, version: int | None) -> ProfileData: ...
+    def create_project(self, user_id: str, payload: ProjectPayload) -> ProjectData: ...
+    def get_project(self, project_id: str) -> ProjectData: ...
+    def update_project(self, user_id: str, project_id: str, payload: ProjectUpdate) -> ProjectData: ...
+    def publish_project(self, user_id: str, project_id: str, version: int) -> ProjectData: ...
+    def close_project(self, user_id: str, project_id: str, version: int) -> ProjectData: ...
+    def list_projects(self, status: str, limit: int, cursor: str | None) -> tuple[list[ProjectData], str | None]: ...
+    def ready(self) -> bool: ...
 
 
 class MemoryStore:
@@ -21,6 +37,9 @@ class MemoryStore:
         self.sessions: dict[str, tuple[str, datetime]] = {}
         self.profiles: dict[str, ProfileData] = {}
         self.projects: dict[str, ProjectData] = {}
+
+    def ready(self) -> bool:
+        return True
 
     def login(self, subject: str) -> tuple[str, str, bool]:
         with self._lock:
@@ -178,4 +197,3 @@ class MemoryStore:
             raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可见。", 404)
         if project.ownerId != user_id:
             raise ServiceError("FORBIDDEN", "你没有权限操作该项目。", 403)
-
