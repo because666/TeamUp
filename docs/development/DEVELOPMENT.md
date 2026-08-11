@@ -26,6 +26,8 @@ python -m compileall -q app tests
 
 本地登录约定：调用 `POST /api/v1/auth/wechat/login` 时，`code` 使用 `local:<subject>`，并将 `consentAccepted` 设为 `true`。当 `TEAMUP_ENVIRONMENT=production` 时，该替代方案自动禁用。代理端口 `7897` 仅用于网络访问，不作为服务监听端口。
 
+真实微信登录配置：在服务端环境设置 `TEAMUP_WECHAT_APP_ID`、`TEAMUP_WECHAT_APP_SECRET`，可选设置 `TEAMUP_WECHAT_SESSION_ENDPOINT`、`TEAMUP_WECHAT_TIMEOUT_SECONDS` 和 `TEAMUP_WECHAT_PROXY_URL`。本机需要通过 7897 出网时，将后者设为 `http://127.0.0.1:7897`；服务仍监听 8000。禁止将 secret 写入前端、仓库、日志或响应。真实微信 code 只能使用一次；本地测试使用 `local:<subject>`，不会调用微信。
+
 ## 1. 当前说明
 
 后端工程已在 `services/api` 初始化并完成首条纵向验证；前端工程位于角色 A 的独立分支。后端基础命令已在本文件第 9 节记录，未实现的前端、MySQL 和完整生产部署命令仍保持 `TBD`，不得据此推断为已完成。

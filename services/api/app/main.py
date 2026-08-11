@@ -24,6 +24,7 @@ from .schemas import (
     SessionData,
 )
 from .store import MemoryStore
+from .wechat import WeChatCodeExchanger, WeChatLoginClient
 
 
 store = MemoryStore()
@@ -46,10 +47,11 @@ def current_user(authorization: str | None = Header(default=None)) -> str:
     return store.user_for_token(bearer_token(authorization))
 
 
-def make_app(settings: Settings | None = None) -> FastAPI:
+def make_app(settings: Settings | None = None, wechat_client: WeChatCodeExchanger | None = None) -> FastAPI:
     app_settings = settings or get_settings()
     if app_settings.environment == "production" and app_settings.store_backend == "memory":
         raise RuntimeError("The memory store is forbidden in production")
+    wechat_login_client = wechat_client or WeChatLoginClient(app_settings)
     app = FastAPI(
         title="TeamUp API",
         version="0.1.0",
@@ -97,13 +99,16 @@ def make_app(settings: Settings | None = None) -> FastAPI:
     async def login(payload: LoginRequest, request: Request):
         if not payload.consentAccepted:
             raise ServiceError("CONSENT_REQUIRED", "请先阅读并同意服务条款与隐私政策。", 422)
-        if app_settings.environment == "production" or not app_settings.allow_local_login:
-            raise ServiceError("EXTERNAL_SERVICE_UNAVAILABLE", "微信登录尚未配置，请稍后再试。", 503)
-        if not payload.code.startswith("local:"):
-            raise ServiceError("INVALID_LOGIN_CODE", "本地环境仅接受 local: 开头的测试凭证。", 401)
-        subject = payload.code.removeprefix("local:").strip()
-        if not subject or len(subject) > 120:
-            raise ServiceError("INVALID_LOGIN_CODE", "登录凭证无效。", 401)
+        if payload.code.startswith("local:"):
+            if app_settings.environment == "production" or not app_settings.allow_local_login:
+                raise ServiceError("LOCAL_LOGIN_DISABLED", "本地登录替代方案已禁用。", 401)
+            subject = payload.code.removeprefix("local:").strip()
+            if not subject or len(subject) > 120:
+                raise ServiceError("INVALID_LOGIN_CODE", "登录凭证无效。", 401)
+            subject = f"local:{subject}"
+        else:
+            openid = await wechat_login_client.exchange_code(payload.code)
+            subject = f"wechat:{app_settings.wechat_app_id}:{openid}"
         user_id, token, complete = store.login(subject)
         session = SessionData(
             accessToken=token,

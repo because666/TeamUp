@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 
 
@@ -9,6 +9,11 @@ class Settings:
     store_backend: str = "memory"
     allow_local_login: bool = True
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+    wechat_app_id: str = ""
+    wechat_app_secret: str = field(default="", repr=False)
+    wechat_proxy_url: str = field(default="", repr=False)
+    wechat_session_endpoint: str = "https://api.weixin.qq.com/sns/jscode2session"
+    wechat_timeout_seconds: float = 5.0
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -21,8 +26,31 @@ def get_settings() -> Settings:
     store_backend = os.getenv("TEAMUP_STORE_BACKEND", "memory")
     allow_local_login = os.getenv("TEAMUP_ALLOW_LOCAL_LOGIN", "true").lower() == "true"
     cors_origins = os.getenv("TEAMUP_CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+    wechat_app_id = os.getenv("TEAMUP_WECHAT_APP_ID", "")
+    wechat_app_secret = os.getenv("TEAMUP_WECHAT_APP_SECRET", "")
+    wechat_proxy_url = os.getenv("TEAMUP_WECHAT_PROXY_URL", "")
+    wechat_session_endpoint = os.getenv(
+        "TEAMUP_WECHAT_SESSION_ENDPOINT",
+        "https://api.weixin.qq.com/sns/jscode2session",
+    )
+    try:
+        wechat_timeout_seconds = float(os.getenv("TEAMUP_WECHAT_TIMEOUT_SECONDS", "5"))
+    except ValueError as error:
+        raise ValueError("TEAMUP_WECHAT_TIMEOUT_SECONDS must be a number") from error
+    if not 1 <= wechat_timeout_seconds <= 15:
+        raise ValueError("TEAMUP_WECHAT_TIMEOUT_SECONDS must be between 1 and 15")
     if environment not in {"local", "test", "staging", "production"}:
         raise ValueError("TEAMUP_ENVIRONMENT must be local, test, staging, or production")
     if store_backend != "memory":
         raise ValueError("Only the memory store is implemented in the backend foundation")
-    return Settings(environment, store_backend, allow_local_login, cors_origins)
+    return Settings(
+        environment=environment,
+        store_backend=store_backend,
+        allow_local_login=allow_local_login,
+        cors_origins=cors_origins,
+        wechat_app_id=wechat_app_id,
+        wechat_app_secret=wechat_app_secret,
+        wechat_proxy_url=wechat_proxy_url,
+        wechat_session_endpoint=wechat_session_endpoint,
+        wechat_timeout_seconds=wechat_timeout_seconds,
+    )

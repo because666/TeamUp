@@ -3,13 +3,17 @@
 > Status: Proposed<br>
 > Owner: 角色 B<br>
 > Reviewers: 角色 A<br>
-> Last Updated: 2026-08-10
+> Last Updated: 2026-08-11
 
 ## 基础实现状态
 
 FastAPI 基础实现目前已覆盖 `/api/v1` 下的 `GET /health/live`、`GET /health/ready`、`POST /auth/wechat/login`（仅 local/test 替代登录）、`POST /auth/logout`、`GET/PUT /me/profile`、`POST/GET/PATCH /projects`，以及 `POST /projects/{projectId}/publish` 和 `POST /projects/{projectId}/close`。
 
 实现返回约定的 `data`/`meta`/`requestId` 信封和结构化错误。当前持久化明确使用内存适配器；MySQL schema 与其余 P0 接口尚未实现，在后端 PRD 中仍标记为 `Proposed`/`TBD`。
+
+### 微信真实登录
+
+`POST /auth/wechat/login` 在服务端配置 `TEAMUP_WECHAT_APP_ID` 和 `TEAMUP_WECHAT_APP_SECRET` 后，会将一次性小程序 `code` 发送到微信 `jscode2session` 接口。服务端按 AppID 命名空间使用返回的 `openid` 做内部用户映射，并签发平台访问凭证；微信身份和 local 测试身份不得共享 subject 命名空间。`session_key` 不进入响应、日志或存储。微信无效 code 返回 `INVALID_LOGIN_CODE`，频率限制返回 `RATE_LIMITED`，外部服务不可用返回 `EXTERNAL_SERVICE_UNAVAILABLE`。配置缺失返回 `WECHAT_NOT_CONFIGURED`，其他微信校验失败返回 `WECHAT_LOGIN_FAILED`，生产或明确关闭替代登录时传入 `local:` code 返回 `LOCAL_LOGIN_DISABLED`。
 
 ## 1. 适用范围
 

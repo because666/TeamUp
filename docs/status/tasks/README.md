@@ -2,7 +2,7 @@
 
 > Status: Confirmed<br>
 > Owner: 角色 A / 角色 B<br>
-> Last Updated: 2026-08-10
+> Last Updated: 2026-08-11
 
 每个会改变产品行为、API、数据、依赖、部署或团队规范的任务都使用独立 Markdown 文件。文件名使用 `<TASK-ID>.md`，从 [任务模板](../templates/TASK_TEMPLATE.md) 创建。
 
@@ -21,9 +21,11 @@
 - [TUP-20260810-role-a-product-foundation](TUP-20260810-role-a-product-foundation.md)
 - [TUP-20260810-backend-frontend-integration](TUP-20260810-backend-frontend-integration.md)
 - [TUP-20260811-fastapi-backend](TUP-20260811-fastapi-backend.md)
+- [TUP-20260811-wechat-login](TUP-20260811-wechat-login.md)
 
 跨角色评审：
 
 - [TUP-20260810-role-b-review](../reviews/TUP-20260810-role-b-review.md)
 - [TUP-20260810-role-a-frontend-integration-review](../reviews/TUP-20260810-role-a-frontend-integration-review.md)
 - [TUP-20260811-fastapi-backend-review](../reviews/TUP-20260811-fastapi-backend-review.md)
+- [TUP-20260811-wechat-login-review](../reviews/TUP-20260811-wechat-login-review.md)
