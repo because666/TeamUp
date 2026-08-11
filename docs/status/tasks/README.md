@@ -2,7 +2,7 @@
 
 > Status: Confirmed<br>
 > Owner: 角色 A / 角色 B<br>
-> Last Updated: 2026-08-10
+> Last Updated: 2026-08-11
 
 每个会改变产品行为、API、数据、依赖、部署或团队规范的任务都使用独立 Markdown 文件。文件名使用 `<TASK-ID>.md`，从 [任务模板](../templates/TASK_TEMPLATE.md) 创建。
 
@@ -19,8 +19,10 @@
 
 - [TUP-20260810-docs-baseline](TUP-20260810-docs-baseline.md)
 - [TUP-20260810-role-a-product-foundation](TUP-20260810-role-a-product-foundation.md)
+- [TUP-20260811-frontend-foundation](TUP-20260811-frontend-foundation.md)
 
 跨角色评审：
 
 - [TUP-20260810-role-b-review](../reviews/TUP-20260810-role-b-review.md)
 - [TUP-20260810-role-a-product-foundation-review](../reviews/TUP-20260810-role-a-product-foundation-review.md)
+- [TUP-20260811-frontend-foundation-review](../reviews/TUP-20260811-frontend-foundation-review.md)

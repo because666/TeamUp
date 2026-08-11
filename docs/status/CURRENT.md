@@ -3,7 +3,7 @@
 > Status: Confirmed<br>
 > Snapshot Branch: `main`<br>
 > Remote Baseline: `167edd5`<br>
-> Last Updated: 2026-08-10 by 角色 A
+> Last Updated: 2026-08-11 by 角色 A
 
 本文件只记录已合并或正在明确交接的聚合状态，不记录逐步开发日志。单个任务的实时进展见 `tasks/`。
 
@@ -19,7 +19,7 @@
 | 产品规范 | Ready for review | 已转为带需求 ID、验收标准和范围边界的 Markdown |
 | AI 协作治理 | Ready for review | 根 AGENTS、双人工作流、任务/交接模板已建立 |
 | 技术架构 | Proposed | 模块化单体和契约基线待双方评审 |
-| 前端工程 | Not started | UniApp 方向已知，版本与命令未确定 |
+| 前端工程 | Ready for review | 任务分支已完成 UniApp 微信小程序 P0 fixture 链路、测试与构建；尚未集成 `main` |
 | 后端工程 | Blocked by decision | 等待 FastAPI / Spring Boot 决策 |
 | 部署环境 | Not started | 腾讯云方向已知，具体拓扑未确定 |
 
@@ -30,6 +30,7 @@
 | TUP-20260810-docs-baseline | 角色 A | 文档、AI 协作与推荐策略基线 | Ready for Review | `role-a/docs/TUP-20260810-docs-baseline` | [任务记录](tasks/TUP-20260810-docs-baseline.md) |
 | TUP-20260810-role-b-review | 角色 B | 文档、后端可行性、安全与协作规则核对 | Pending | `origin/role-a/docs/TUP-20260810-docs-baseline` | [评审记录](reviews/TUP-20260810-role-b-review.md) |
 | TUP-20260810-role-a-product-foundation | 角色 A | 用户流程、信息架构与页面状态规范 | Ready for Review | `role-a/docs/TUP-20260810-role-a-product-foundation` | [任务记录](tasks/TUP-20260810-role-a-product-foundation.md) |
+| TUP-20260811-frontend-foundation | 角色 A | UniApp 微信小程序工程与 P0 页面骨架 | Ready for Review | `role-a/feature/TUP-20260811-frontend-foundation` | [任务记录](tasks/TUP-20260811-frontend-foundation.md) |
 
 角色 A 的产品基础任务可以与角色 B 的技术基线评审并行；双方不得修改对方的任务文件或高冲突契约。
 
@@ -51,10 +52,10 @@
 ## 6. 下一步建议顺序
 
 1. 角色 A 通过 QQ 通知角色 B 按评审文件核对；结论必须回写仓库，PR 可选。
-2. 角色 A 启动产品基础任务，先完成登录 -> 名片 -> 项目发布的流程、页面和契约映射，不锁定工程工具链。
-3. 角色 B 主导确认 ADR-0001，再初始化后端工程和真实命令。
+2. 角色 A 提交并推送前端任务分支后，通过 QQ 通知角色 B 按前端评审文件核对契约使用、安全边界和微信端构建。
+3. 角色 B 主导确认 ADR-0001，再初始化后端工程、OpenAPI 和真实命令；前端随后只替换 `src/services/` 适配层。
 4. 双方按 ADR-0002 评审推荐事件、特征 schema 和模型上线门槛。
-5. 契约评审通过后再建立 CI、测试数据库和 staging，并行扩展匹配与沟通。
+5. 产品与前端评审通过、契约确认后再建立 CI、测试数据库和 staging，并行扩展匹配与沟通。
 
 ## 7. 更新规则
 

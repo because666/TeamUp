@@ -2,34 +2,56 @@
 
 > Status: Proposed<br>
 > Owner: 角色 A / 角色 B<br>
-> Last Updated: 2026-08-10
+> Last Updated: 2026-08-11
 
 ## 1. 当前说明
 
-仓库尚未初始化前端和后端工程，因此本文件不提供虚构的安装、启动或测试命令。角色 A、B 完成工程初始化时，必须在同一任务分支和评审批次中把下方 `TBD` 替换为实际可执行命令。
+微信小程序前端已在任务分支 `role-a/feature/TUP-20260811-frontend-foundation` 初始化，等待角色 B 评审和集成；后端工程仍未初始化。下方前端命令均已在 Windows、Node `v25.2.1`、npm `11.6.2` 上实际执行，团队长期使用的 Node LTS 版本仍需在 CI 或第二台开发机验证后确认。
 
 ## 2. 工具链登记
 
 | 范围 | 工具 | 版本来源 | 安装命令 | 启动命令 | 测试命令 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 小程序 | UniApp | `TBD` | `TBD` | `TBD` | `TBD` | TBD |
+| 小程序 | UniApp `3.0.0-5020320260806002`、Vue `3.4.21`、TypeScript `4.9.5`、Vite `5.2.8` | `apps/miniapp/package-lock.json` | `cd apps/miniapp && npm ci` | `npm run dev:mp-weixin` | `npm test` | Ready for Review |
 | 后端 | FastAPI 或 Spring Boot | ADR-0001 | `TBD` | `TBD` | `TBD` | TBD |
 | 数据库 | MySQL | `TBD` | `TBD` | `TBD` | `TBD` | TBD |
 | API 契约 | OpenAPI | 后端清单/生成配置 | `TBD` | `TBD` | `TBD` | Proposed |
 
 版本必须由锁文件、wrapper 或明确的版本配置固定，不要只在聊天中约定。
 
+### 2.1 微信小程序前端命令
+
+所有命令在 `apps/miniapp/` 执行：
+
+| 目的 | 命令 | 模式 / 产物 |
+| --- | --- | --- |
+| 按锁文件安装 | `npm ci` | 不写入真实密钥或 AppID |
+| H5 合约模拟预览 | `npm run dev:h5` | `fixture`；仅用于页面开发和截图 |
+| 微信合约模拟开发 | `npm run dev:mp-weixin` | `fixture`；导入 `dist/dev/mp-weixin` |
+| H5 真实接口模式 | `npm run dev:h5:api` | API 未接入时明确返回 `BACKEND_NOT_CONFIGURED` |
+| 微信真实接口模式 | `npm run dev:mp-weixin:api` | API 未接入时不模拟成功 |
+| 类型检查 | `npm run type-check` | `vue-tsc --noEmit` |
+| 单元测试 | `npm test` | Vitest；当前覆盖校验、fixture 来源和错误映射 |
+| H5 演示构建 | `npm run build:demo:h5` | `fixture`，不得作为生产包 |
+| 微信演示构建 | `npm run build:demo:mp-weixin` | `fixture`，导入 `dist/build/mp-weixin` |
+| H5 生产检查 | `npm run build:h5` | 不启用 fixture |
+| 微信生产检查 | `npm run build:mp-weixin` | 不启用 fixture；导入 `dist/build/mp-weixin` |
+
+微信开发者工具中使用测试 AppID 或团队分配的开发 AppID；真实 AppID 不写入共享仓库。`manifest.json` 当前保持空 AppID，并关闭本地演示的 URL 校验，发布前必须由角色 B 按环境与域名白名单复核。
+
+`@types/node` 固定为 `18.18.0` 以兼容模板使用的 TypeScript 4.9；`sass` 是 `uni-ui` 图标样式在微信端编译所需的显式依赖。升级 TypeScript、UniApp 或这两个依赖前必须重新运行全部构建目标。
+
 ## 3. 建议仓库布局
 
-布局需在技术栈确认后创建，不要为占位提前生成空工程：
+当前前端已采用下列布局；后端和共享契约目录仍须在对应技术决策确认后创建：
 
 ```text
 apps/
-  miniapp/            # UniApp 微信小程序
+  miniapp/            # 已初始化：UniApp 微信小程序；H5 仅作预览
 services/
-  api/                # 后端应用
+  api/                # 尚未创建：等待 ADR-0001
 packages/
-  contracts/          # OpenAPI 生成类型或共享契约（若工具链支持）
+  contracts/          # 尚未创建：等待 OpenAPI 工具链
 docs/
   ...
 ```
@@ -76,13 +98,13 @@ Mock 必须与契约生成或受契约测试约束；禁止手写一套与真实
 - 自动化测试不得依赖执行顺序或共享的长期测试账号；
 - 上传文件使用专用测试存储或本地替代，不写入仓库。
 
-## 8. 完成开发环境初始化时必须补充
+## 8. 剩余开发环境工作
 
-- 受支持的操作系统与运行时版本；
-- 一条从全新克隆到启动成功的路径；
+- 在 CI 或第二台开发机确认受支持的 Node LTS 版本；
+- 前端分支集成后，从全新克隆再次执行 `npm ci` 和全部检查；
 - 数据库创建和迁移命令；
 - seed/reset 测试数据命令；
-- 前端、后端、契约、端到端测试命令；
+- 后端、契约和端到端测试命令；
 - lint、格式化、类型检查和构建命令；
 - 常见错误与解决方式。
 
