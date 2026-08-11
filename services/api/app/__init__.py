@@ -1,0 +1,2 @@
+"""TeamUp API application package."""
+

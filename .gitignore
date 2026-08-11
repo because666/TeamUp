@@ -1,0 +1,59 @@
+# Local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local Codex state and temporary overrides
+.codex-log/
+AGENTS.override.md
+**/AGENTS.override.md
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+tmp/
+temp/
+.cache/
+
+# JavaScript / UniApp
+node_modules/
+dist/
+unpackage/
+coverage/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Java
+.gradle/
+build/
+target/
+*.class
+
+# Local database and uploads
+*.db
+*.sqlite
+uploads/
+
+# Local machine-learning runs and serialized artifacts
+.mlruns/
+mlruns/
+model-artifacts/
+training-output/
+*.joblib
+*.pkl
+*.onnx
