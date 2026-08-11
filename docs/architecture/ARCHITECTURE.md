@@ -3,7 +3,7 @@
 > Status: Proposed<br>
 > Owner: 角色 B<br>
 > Reviewers: 角色 A<br>
-> Last Updated: 2026-08-10
+> Last Updated: 2026-08-11
 
 ## 1. 架构目标
 
@@ -18,7 +18,7 @@
 | 项目 | 状态 | 当前结论 |
 | --- | --- | --- |
 | 客户端 | Confirmed | UniApp 微信小程序方向 |
-| 后端框架 | TBD | FastAPI / Spring Boot，等待 ADR-0001 |
+| 后端框架 | Confirmed | FastAPI；具体版本和工具链等待初始化验证 |
 | 数据库 | Confirmed | MySQL 作为核心事务数据存储 |
 | AI 服务 | Proposed | 通用大模型 API，P1 且必须可关闭/降级 |
 | 自训练推荐模型 | Confirmed | P0 规则算法积累数据，P1 训练轻量排序模型 |

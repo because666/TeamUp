@@ -5,6 +5,10 @@
 > Reviewers: 角色 A<br>
 > Last Updated: 2026-08-10
 
+## 基础实现状态
+
+首个 FastAPI 切片在 local/test 内存适配器中映射了 `User`、`Profile`、`Project` 和 `ProjectRole`。该适配器不构成生产持久化决策；进入 staging 或 production 前仍需完成 MySQL 表、约束、迁移和回滚验证。
+
 ## 1. 设计原则
 
 - 核心关系使用数据库约束保证，不只依赖应用代码；

@@ -3,7 +3,15 @@
 > Status: Proposed<br>
 > Owner: 角色 A / 角色 B<br>
 > Reviewers: 角色 A / 角色 B<br>
-> Last Updated: 2026-08-10
+> Last Updated: 2026-08-11
+
+## 当前后端切片
+
+可运行 FastAPI 服务位于 `services/api`，默认监听 `127.0.0.1:8000`。网络代理 `127.0.0.1:7897` 不得作为服务监听端口。
+
+本地联调时调用 `POST /api/v1/auth/wechat/login`，请求体为 `{ "code": "local:<stable-subject>", "consentAccepted": true }`，再将返回的 `data.accessToken` 放入 `Authorization: Bearer <token>`。该替代登录只在 `local`/`test` 可用，真实微信 code 换取仍待实现。
+
+当前首条切片包括 `GET /api/v1/me/profile`、`PUT /api/v1/me/profile`、`POST /api/v1/projects`、`GET/PATCH /api/v1/projects/{projectId}`、`POST /api/v1/projects/{projectId}/publish`、`POST /api/v1/projects/{projectId}/close`，以及健康检查和会话接口。响应使用 `data`、`meta`、`requestId`；失败响应使用 `error.code`。
 
 ## 1. 目标与适用范围
 
@@ -16,12 +24,12 @@
 | 项目 | 当前状态 | 对接规则 |
 | --- | --- | --- |
 | 客户端 | UniApp 微信小程序方向已确认，工程未初始化 | 角色 A 负责页面、状态、请求适配层和契约 mock |
-| 后端 | FastAPI / Spring Boot 待 ADR-0001 确认 | 角色 B 负责 OpenAPI、接口实现、数据库、鉴权和部署 |
+| 后端 | FastAPI 已由 ADR-0001 确认，具体版本和工具链待初始化验证 | 角色 B 负责 OpenAPI、接口实现、数据库、鉴权和部署 |
 | API | `Proposed` 文档契约 | 实现前双方逐项评审；框架确定后以 OpenAPI 为机器可读真值 |
 | 数据库 | MySQL 方向已确认，schema 未落地 | 角色 B 通过版本化迁移维护，前端不依赖表结构 |
 | 联调环境 | `local` / `test` / `staging` 方向已定义，尚未建立 | 建立后由角色 B提供地址和健康状态，双方不得在聊天中传密钥 |
 
-在 ADR-0001 和接口字段未确认前，可以继续做产品流程、页面状态和契约 mock；不得把 mock 成功响应表述为后端已完成。
+在 FastAPI 工程和接口字段未完成前，可以继续做产品流程、页面状态和契约 mock；不得把 mock 成功响应表述为后端已完成。
 
 ## 3. 真值、职责与文件所有权
 
@@ -242,7 +250,7 @@ QQ 只用于通知对方查看分支、任务或评审文件。排查接口问�
 
 ## 13. 待双方确认
 
-- ADR-0001 的后端框架结论；
+- FastAPI 初始化验证以及具体运行时、依赖和数据访问工具；
 - OpenAPI 文件位置、生成方式和契约测试工具；
 - 前端运行时、包管理器、请求库和环境变量名；
 - local/test 的微信登录替代方案；

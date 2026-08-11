@@ -5,6 +5,12 @@
 > Reviewers: 角色 A<br>
 > Last Updated: 2026-08-10
 
+## 基础实现状态
+
+FastAPI 基础实现目前已覆盖 `/api/v1` 下的 `GET /health/live`、`GET /health/ready`、`POST /auth/wechat/login`（仅 local/test 替代登录）、`POST /auth/logout`、`GET/PUT /me/profile`、`POST/GET/PATCH /projects`，以及 `POST /projects/{projectId}/publish` 和 `POST /projects/{projectId}/close`。
+
+实现返回约定的 `data`/`meta`/`requestId` 信封和结构化错误。当前持久化明确使用内存适配器；MySQL schema 与其余 P0 接口尚未实现，在后端 PRD 中仍标记为 `Proposed`/`TBD`。
+
 ## 1. 适用范围
 
 本文定义前后端在实现前必须共同遵守的 HTTP 契约基线。正式开发时应由 OpenAPI 文件作为机器可读真值，本文解释跨接口规则和资源边界。

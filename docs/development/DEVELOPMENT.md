@@ -2,18 +2,40 @@
 
 > Status: Proposed<br>
 > Owner: 角色 A / 角色 B<br>
-> Last Updated: 2026-08-10
+> Last Updated: 2026-08-11
+
+## 9. FastAPI 后端基础实现
+
+可运行后端位于 `services/api`。当前仅在 `local` 和 `test` 使用明确标注的内存存储；MySQL 适配器和迁移属于后续独立任务。
+
+在 `services/api` 目录执行：
+
+```powershell
+python -m pip install -e ".[test]"
+$env:TEAMUP_ENVIRONMENT = "local"
+$env:TEAMUP_ALLOW_LOCAL_LOGIN = "true"
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+在 `services/api` 目录执行检查：
+
+```powershell
+python -m pytest
+python -m compileall -q app tests
+```
+
+本地登录约定：调用 `POST /api/v1/auth/wechat/login` 时，`code` 使用 `local:<subject>`，并将 `consentAccepted` 设为 `true`。当 `TEAMUP_ENVIRONMENT=production` 时，该替代方案自动禁用。代理端口 `7897` 仅用于网络访问，不作为服务监听端口。
 
 ## 1. 当前说明
 
-仓库尚未初始化前端和后端工程，因此本文件不提供虚构的安装、启动或测试命令。角色 A、B 完成工程初始化时，必须在同一任务分支和评审批次中把下方 `TBD` 替换为实际可执行命令。
+后端工程已在 `services/api` 初始化并完成首条纵向验证；前端工程位于角色 A 的独立分支。后端基础命令已在本文件第 9 节记录，未实现的前端、MySQL 和完整生产部署命令仍保持 `TBD`，不得据此推断为已完成。
 
 ## 2. 工具链登记
 
 | 范围 | 工具 | 版本来源 | 安装命令 | 启动命令 | 测试命令 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 小程序 | UniApp | `TBD` | `TBD` | `TBD` | `TBD` | TBD |
-| 后端 | FastAPI 或 Spring Boot | ADR-0001 | `TBD` | `TBD` | `TBD` | TBD |
+| 后端 | FastAPI | `services/api/pyproject.toml` | `python -m pip install -e ".[test]"` | `python -m uvicorn app.main:app --host 127.0.0.1 --port 8000` | `python -m pytest` | Confirmed |
 | 数据库 | MySQL | `TBD` | `TBD` | `TBD` | `TBD` | TBD |
 | API 契约 | OpenAPI | 后端清单/生成配置 | `TBD` | `TBD` | `TBD` | Proposed |
 

@@ -12,6 +12,7 @@
 | --- | --- |
 | 任何行为性修改 | `../AGENTS.md`、`status/CURRENT.md`、对应任务文件 |
 | 产品或交互 | `product/PRODUCT_BRIEF.md`、`product/PRD.md`、`product/MVP_SCOPE.md` |
+| 后端需求与任务拆分 | `product/BACKEND_PRD.md`、`architecture/API_CONTRACT.md`、`architecture/DATA_MODEL.md` |
 | 前后端联调 | `architecture/API_CONTRACT.md`、`architecture/DATA_MODEL.md` |
 | 匹配或推荐模型 | `architecture/MATCHING.md`、`architecture/ML_RECOMMENDER.md`、`product/PRD.md`、相关 ADR |
 | 架构或依赖 | `architecture/ARCHITECTURE.md`、`decisions/README.md` |
@@ -26,6 +27,7 @@
 
 - [产品概要](product/PRODUCT_BRIEF.md)：定位、用户、价值和成功指标。
 - [产品需求文档](product/PRD.md)：功能编号、业务规则和验收标准。
+- [后端产品需求文档](product/BACKEND_PRD.md)：FastAPI 后端功能、权限、数据、测试和分阶段交付要求。
 - [MVP 范围](product/MVP_SCOPE.md)：P0/P1、非目标和发布门槛。
 
 ## 架构
@@ -56,6 +58,7 @@
 - [任务目录](status/tasks/README.md)：各分支独立任务状态。
 - [角色 B 文档与技术基线评审](status/reviews/TUP-20260810-role-b-review.md)：无需 PR 的核对范围、Codex 提示词和结论模板。
 - [前后端对接指南角色 A 评审](status/reviews/TUP-20260810-role-a-frontend-integration-review.md)：角色 A 对页面、mock 和联调流程的核对范围与结论模板。
+- [FastAPI 后端决策角色 A 评审](status/reviews/TUP-20260811-fastapi-backend-review.md)：角色 A 对契约和用户可见影响的评审入口。
 - [任务模板](status/templates/TASK_TEMPLATE.md)、[交接模板](status/templates/HANDOFF_TEMPLATE.md) 和 [模型发布模板](status/templates/MODEL_RELEASE_TEMPLATE.md)。
 
 ## 历史来源

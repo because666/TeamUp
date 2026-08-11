@@ -6,9 +6,9 @@ TeamUp 是面向高校学生竞赛、科研与创业项目的智能组队平台�
 
 仓库处于文档与工程基线建设阶段，尚未提交业务代码。
 
-- 已确认：微信小程序方向、UniApp 前端、MySQL、腾讯云部署方向、双人核心团队。
+- 已确认：微信小程序方向、UniApp 前端、FastAPI 后端、MySQL、腾讯云部署方向、双人核心团队。
 - 已确认：推荐系统先采用可解释规则算法，积累真实数据后训练平台自己的轻量机器学习排序模型；通用大模型不参与最终匹配分数。
-- 待决策：后端采用 FastAPI 还是 Spring Boot、轻量排序模型的启用数据门槛、搜索与向量数据库何时引入。
+- 待决策：FastAPI 工程的具体运行时与依赖版本、轻量排序模型的启用数据门槛、搜索与向量数据库何时引入。
 - 当前工作状态以 [CURRENT.md](docs/status/CURRENT.md) 为准。
 - 已确认和待确认的技术决策以 [决策目录](docs/decisions/README.md) 为准。
 
@@ -26,6 +26,7 @@ TeamUp 是面向高校学生竞赛、科研与创业项目的智能组队平台�
 - [AGENTS.md](AGENTS.md)：Codex 必须遵守的仓库级规则
 - [文档总索引](docs/README.md)：产品、架构、开发、测试、安全与状态文档
 - [产品需求](docs/product/PRD.md)：带需求编号和验收标准的 MVP 需求
+- [后端产品需求](docs/product/BACKEND_PRD.md)：FastAPI 后端功能、权限、数据、测试和交付阶段
 - [MVP 范围](docs/product/MVP_SCOPE.md)：首版边界、非目标和发布门槛
 - [系统架构](docs/architecture/ARCHITECTURE.md)：当前架构约束与待决策项
 - [AI 协作流程](docs/development/AI_WORKFLOW.md)：两人使用 Codex 的任务协议
