@@ -7,9 +7,9 @@
 
 ## 基础实现状态
 
-FastAPI 基础实现目前已覆盖 `/api/v1` 下的 `GET /health/live`、`GET /health/ready`、`POST /auth/wechat/login`（仅 local/test 替代登录）、`POST /auth/logout`、`GET/PUT /me/profile`、`POST/GET/PATCH /projects`，以及 `POST /projects/{projectId}/publish` 和 `POST /projects/{projectId}/close`。
+FastAPI 基础实现目前已覆盖 `/api/v1` 下的健康检查、微信真实/local 登录、退出、当前用户名片，以及项目创建、详情、更新、发布、关闭和公开列表。
 
-实现返回约定的 `data`/`meta`/`requestId` 信封和结构化错误。当前持久化明确使用内存适配器；MySQL schema 与其余 P0 接口尚未实现，在后端 PRD 中仍标记为 `Proposed`/`TBD`。
+实现返回约定的 `data`/`meta`/`requestId` 信封和结构化错误，并已支持 local/test memory 与 MySQL 8 持久化。`match-v0.1` 纯规则引擎已实现；本节新增的匹配 API 和数据字段仍是 [ADR-0005](../decisions/ADR-0005-matching-api-data-contract.md) 下的 Proposed 契约，尚未发布路由或迁移。
 
 ### 微信真实登录
 
@@ -108,7 +108,9 @@ FastAPI 基础实现目前已覆盖 `/api/v1` 下的 `GET /health/live`、`GET /
 | API-PROJ-05 | POST | `/projects/{projectId}/close` | 关闭项目 | PROJ-001 |
 | API-DISC-01 | GET | `/projects` | 项目大厅筛选 | DISC-001 |
 | API-DISC-02 | GET | `/profiles` | 人才大厅筛选 | DISC-002 |
-| API-MATCH-01 | GET | `/projects/{projectId}/matches` | 岗位候选成员 | MATCH-001/002 |
+| API-MATCH-PREF-01 | GET | `/me/match-preferences` | 获取匹配方向和时间偏好 | MATCH-001/002 |
+| API-MATCH-PREF-02 | PUT | `/me/match-preferences` | 更新匹配方向和时间偏好 | MATCH-001/002 |
+| API-MATCH-01 | GET | `/projects/{projectId}/matches` | 指定岗位的候选成员 | MATCH-001/002 |
 | API-MATCH-02 | GET | `/me/project-matches` | 用户候选项目 | MATCH-001/002 |
 | API-MATCH-03 | POST | `/recommendation-impressions` | 登记客户端实际展示的候选与位置 | MATCH-003 |
 | API-CONV-01 | POST | `/conversations` | 发起或取得会话 | MSG-001 |
@@ -123,6 +125,52 @@ FastAPI 基础实现目前已覆盖 `/api/v1` 下的 `GET /health/live`、`GET /
 | API-SAFE-03 | DELETE | `/blocks/{blockedUserId}` | 取消拉黑 | SAFE-001 |
 
 ## 7. 关键 DTO 最小字段
+
+### 匹配输入扩展（Proposed）
+
+为避免给现有 `PUT /me/profile` 增加字段后被旧客户端整资源覆盖，方向和时间偏好使用独立资源：
+
+```json
+{
+  "desiredDirections": ["AI", "后端"],
+  "availabilitySlots": [
+    {
+      "timezone": "Asia/Shanghai",
+      "weekday": 6,
+      "startMinute": 540,
+      "endMinute": 720
+    }
+  ],
+  "version": 1,
+  "updatedAt": "2026-08-11T08:00:00Z"
+}
+```
+
+- `desiredDirections` 使用角色 A 确认的受控方向词表，建议 `1..10` 项；
+- `availabilitySlots` 建议最多 21 项，`weekday` 为 `1..7`，分钟范围为当天 `0..1440`，同一时区/星期不能重叠；P0 推荐只接受 `Asia/Shanghai`，避免未定义的跨时区周期和夏令时语义；
+- `PUT /me/match-preferences` 使用 `version` 乐观锁；尚未创建时 `version=0`；
+- GET 返回完整 DTO；PUT 请求不传 `updatedAt`，成功响应返回服务端的新 `version` 和 `updatedAt`；
+- 空数组表示用户明确暂不提供，不从简介、专业或定位信息推断；
+- 用户关闭名片公开后，该资源仍可编辑，但不会进入新的他人匹配结果。
+
+现有岗位 DTO Proposed 新增：
+
+```json
+{
+  "skills": ["Python", "MySQL", "Docker"],
+  "requiredSkills": ["Python"],
+  "requiredAvailabilitySlots": [],
+  "collaborationRole": "MEMBER"
+}
+```
+
+- `skills` 和 `requiredSkills` 均必须去重，且 `requiredSkills` 是 `skills` 的子集；历史和新建时省略 required 均为 `[]`；
+- 更新既有项目时，旧客户端省略 `requiredSkills` 表示保留原值，并与新的 `skills` 取交集，不能隐式新增 required；
+- `requiredAvailabilitySlots` 使用相同时间段 DTO；为空时只比较现有 `hoursPerWeek`，不作时间段硬过滤；
+- `collaborationRole` Proposed 枚举为 `LEADER | MEMBER | FLEXIBLE`，历史岗位迁移为 `MEMBER`；
+- 项目层 Proposed 增加 `collaborationScenarios`，与用户名片已有字段使用同一受控枚举。
+
+专业和经历因素在受控专业分类及独立 experience 契约落地前必须保持 missing，不允许用自由文本 `major`、`bio` 或项目说明猜分。
 
 ### ProjectSummary
 
@@ -141,11 +189,23 @@ FastAPI 基础实现目前已覆盖 `/api/v1` 下的 `GET /health/live`、`GET /
 
 ### MatchResult
 
+> 以下扩展字段和列表信封属于 ADR-0005 Proposed，角色 A 评审前不得视为已发布接口。
+
 ```json
 {
-  "targetId": "opaque_id",
+  "targetType": "PROJECT_ROLE",
+  "targetId": "role_opaque_id",
+  "targetSummary": {
+    "projectId": "project_opaque_id",
+    "projectTitle": "校园创新项目",
+    "roleId": "role_opaque_id",
+    "roleName": "后端开发",
+    "direction": "AI",
+    "skillLabels": ["Python", "MySQL"]
+  },
   "score": 82,
   "confidence": 0.9,
+  "informationSufficient": true,
   "engineType": "RULE",
   "engineVersion": "match-v0.1",
   "modelVersion": null,
@@ -156,7 +216,59 @@ FastAPI 基础实现目前已覆盖 `/api/v1` 下的 `GET /health/live`、`GET /
 }
 ```
 
-`engineType` 可为 `RULE` 或 `ML_RANKER`。自然语言解释可以由客户端模板或生成式 AI 生成，但 `score`、`confidence`、`engineVersion`、`modelVersion` 和 `factors` 只能来自匹配服务。
+`targetType` Proposed 枚举为 `PROFILE | PROJECT_ROLE`：
+
+- `API-MATCH-01` 返回 `PROFILE`，`targetId` 是候选用户的 opaque ID；`targetSummary` 只含公开昵称和公开技能标签。
+- `API-MATCH-02` 返回 `PROJECT_ROLE`，`targetId` 是岗位 ID；`targetSummary` 包含跳转项目详情和展示岗位所需的最小公开字段。
+
+`engineType` 可为 `RULE` 或 `ML_RANKER`。自然语言解释可以由客户端模板或生成式 AI 生成，但 `score`、`confidence`、`informationSufficient`、`engineVersion`、`modelVersion` 和 `factors` 只能来自匹配服务。内部 `rankingScore` 只用于排序，不返回客户端。
+
+### 匹配列表请求与响应（Proposed）
+
+`API-MATCH-01`：
+
+```http
+GET /api/v1/projects/{projectId}/matches?roleId={roleId}&limit=20&cursor={opaqueCursor}
+Authorization: Bearer <token>
+```
+
+- 仅项目 owner 可调用；`roleId` 必须属于路径中的项目；
+- 以该岗位为上下文返回 `PROFILE` 目标；
+- 非 owner 返回 `403 FORBIDDEN`，不存在或不可见的项目/岗位返回 `404 RESOURCE_NOT_FOUND`；
+- 项目或岗位不是可匹配状态时返回 `409 PROJECT_NOT_MATCHABLE`。
+
+`API-MATCH-02`：
+
+```http
+GET /api/v1/me/project-matches?limit=20&cursor={opaqueCursor}
+Authorization: Bearer <token>
+```
+
+- 只使用当前登录用户的完整名片；该结果仅返回本人，因此不要求名片已公开；
+- 按具体开放岗位返回 `PROJECT_ROLE` 目标，同一项目可以因不同岗位出现多条结果；
+- 名片不存在或未完成时返回 `409 MATCH_PROFILE_INCOMPLETE`；关闭公开只阻止该用户进入 `API-MATCH-01`，不阻止本人使用 `API-MATCH-02`。
+
+两个接口均使用统一 envelope：
+
+```json
+{
+  "data": [],
+  "meta": {
+    "recommendationRequestId": "rrq_opaque_random_id",
+    "nextCursor": null,
+    "hasMore": false
+  },
+  "requestId": "req_trace_id"
+}
+```
+
+- 首次请求不传 `cursor`；`limit` 默认 20，最大 50；
+- `cursor` 只能由上一页 `meta.nextCursor` 原样传回，并绑定请求者、方向、上下文和候选快照；
+- 同一推荐请求复用相同 `recommendationRequestId` 和冻结排序；读取每页时仍重新检查状态、拉黑、容量和公开权限，失效目标静默跳过；
+- 跳过失效目标后继续向后扫描直到填满 `limit` 或快照耗尽；`nextCursor` 指向最后实际扫描 rank，避免下一页重复；
+- 非法、跨用户或跨上下文 cursor 返回 `422 INVALID_CURSOR`；过期 cursor 返回 `410 RECOMMENDATION_EXPIRED`；
+- 无候选是 `200` 和空 `data`，不是服务异常；
+- 最大候选窗口建议 200、快照建议有效 24 小时，均保持 Proposed，需产品和负载评审。
 
 ### RecommendationImpressionRequest
 
@@ -164,13 +276,21 @@ FastAPI 基础实现目前已覆盖 `/api/v1` 下的 `GET /health/live`、`GET /
 {
   "recommendationRequestId": "rec_request_id",
   "items": [
-    {"targetId": "opaque_id", "position": 1}
+    {"targetType": "PROJECT_ROLE", "targetId": "opaque_id", "position": 1}
   ],
   "occurredAt": "2026-08-10T08:00:00Z"
 }
 ```
 
-服务端只能接受先前在该用户推荐响应中签发的 `recommendationRequestId` 和候选，执行幂等去重并限制时间窗口。详情、沟通、邀请和组队结果由对应业务接口在服务端关联记录，不接受客户端直接声明“成功组队”。
+服务端只能接受先前在该用户推荐响应中签发的 `recommendationRequestId`、目标类型和候选，执行幂等去重并限制时间窗口。曝光写入前再次检查推荐请求所有者和目标资格；已关闭、被拉黑或已满员目标不再登记新曝光。建议规则：
+
+- `items` 为实际进入可视区域的子集，数量 `1..50`，`position` 从 1 开始且不能重复；
+- 唯一键为推荐请求、viewer、target type 和 target ID；
+- 重复提交同一 position 返回原结果，不产生第二条曝光；同一目标改报不同 position 返回 `409 IMPRESSION_CONFLICT`；
+- 不属于候选快照返回 `422 INVALID_RECOMMENDATION_TARGET`；请求过期返回 `410 RECOMMENDATION_EXPIRED`；
+- `occurredAt` 仅作客户端观察时间，服务端另存接收时间并限制可接受时钟偏差。
+
+详情、沟通、邀请和组队结果由对应业务接口在服务端关联记录，不接受客户端直接声明“成功组队”。
 
 ## 8. 兼容性规则
 

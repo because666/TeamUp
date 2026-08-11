@@ -61,6 +61,7 @@
 - [FastAPI 后端决策角色 A 评审](status/reviews/TUP-20260811-fastapi-backend-review.md)：角色 A 对契约和用户可见影响的评审入口。
 - [MySQL 持久化角色 A 评审](status/reviews/TUP-20260811-mysql-persistence-review.md)：角色 A 对持久化切换、契约兼容和前端影响的评审入口。
 - [match-v0.1 角色 A 评审](status/reviews/TUP-20260811-match-v0-1-review.md)：角色 A 对规则权重、解释代码和后续字段契约的评审入口。
+- [匹配 API/数据契约角色 A 评审](status/reviews/TUP-20260811-match-api-data-contract-review.md)：角色 A 对岗位粒度、匹配偏好、分页、曝光和兼容迁移的决策入口。
 - [任务模板](status/templates/TASK_TEMPLATE.md)、[交接模板](status/templates/HANDOFF_TEMPLATE.md) 和 [模型发布模板](status/templates/MODEL_RELEASE_TEMPLATE.md)。
 
 ## 历史来源

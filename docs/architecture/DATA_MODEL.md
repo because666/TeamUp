@@ -24,6 +24,50 @@
 
 数据库时间以 UTC 秒精度写入，API 输出恢复为带 UTC 时区的时间。原始平台 token、微信 `session_key`、AppSecret 和数据库连接串不得进入业务表。
 
+## 匹配接入数据扩展（Proposed）
+
+以下结构属于 [ADR-0005](../decisions/ADR-0005-matching-api-data-contract.md) 提案。角色 A 评审、ADR Accepted 和独立迁移任务完成前，不代表已存在物理表。
+
+### 结构化匹配输入
+
+| 结构 | Proposed 字段/变化 | 关键约束与兼容策略 |
+| --- | --- | --- |
+| `match_preferences` | `user_id`, `version`, `updated_at` | 一个用户一份匹配偏好；独立乐观锁，避免旧 profile PUT 清空新字段 |
+| `project_role_skills` | 增加 `required BOOLEAN NOT NULL DEFAULT FALSE` | 历史记录全部为 `false`；同岗位至少保留一个技能；required 必须属于岗位 skills |
+| `match_preference_directions` | `user_id`, `direction_code`, `position` | FK 到 match preferences；用户主动选择；组合唯一；使用受控方向词表，不从简介推断 |
+| `match_preference_availability_slots` | `id`, `user_id`, `timezone`, `weekday`, `start_minute`, `end_minute` | FK 到 match preferences；`weekday 1..7`，`0 <= start < end <= 1440`；时间段不得重叠；P0 推荐仅 `Asia/Shanghai`；每周小时仍保留在 profile |
+| `project_roles` | 增加 `collaboration_role` | Proposed 枚举 `LEADER/MEMBER/FLEXIBLE`；历史迁移为 `MEMBER` |
+| `project_role_availability_slots` | `id`, `role_id`, `timezone`, `weekday`, `start_minute`, `end_minute` | 空集合表示无硬时间段；非空时用于重叠过滤和时间因素 |
+| `project_collaboration_scenarios` | `project_id`, `scenario_code`, `position` | 与 profile collaboration scenarios 使用同一受控词表 |
+| `experiences` | `id`, `user_id`, `type`, `title`, `direction_code`, `description`, `verification_status`, `visibility`, `started_at`, `ended_at` | 自述与认证分开；AI 不可写 `VERIFIED`；仅公开记录参与他人匹配 |
+| `experience_skills` | `experience_id`, `skill_name`, `position` | 使用同一版本化技能词表；不从自由文本自动补标签 |
+| `project_members` | `project_id`, `user_id`, `role_id`, `status`, `joined_at` | 活跃成员组合唯一；容量计算只统计受控活跃状态 |
+| `blocks` | `blocker_id`, `blocked_id`, `created_at` | 组合唯一，不允许自己拉黑自己；匹配过滤双向查询但不暴露原因 |
+
+方向、技能和经历的标准词表版本必须随匹配快照记录。学校层级、性别、微信身份、联系方式、私信和举报数据不进入这些结构化输入。
+
+### 推荐请求与候选快照
+
+| 表 | Proposed 关键字段 | 约束 |
+| --- | --- | --- |
+| `recommendation_requests` | `id`, `viewer_user_id`, `direction`, `context_project_id`, `context_role_id`, `engine_type`, `engine_version`, `model_version`, `feature_schema_version`, `expires_at`, `created_at` | ID 使用高熵 opaque 随机值；`ROLE_TO_USER` 必须绑定 owner 可管理的项目岗位；请求有候选上限和 TTL |
+| `recommendation_candidates` | `id`, `request_id`, `rank`, `target_type`, `target_user_id`, `target_role_id`, `score`, `confidence`, `ranking_score`, `factors_json`, `missing_information_json`, `created_at` | `(request_id, rank)` 唯一；`PROFILE` 只填 user FK，`PROJECT_ROLE` 只填 role FK；只保存允许解释因素，不保存敏感原始特征 |
+| `recommendation_impressions` | `id`, `request_id`, `candidate_id`, `viewer_user_id`, `position`, `client_occurred_at`, `received_at` | `(request_id, viewer_user_id, candidate_id)` 唯一；candidate 必须属于 request；不同 position 的重复提交冲突 |
+
+`factors_json` 是不可变快照，不作为用户资料或当前匹配真值；其 schema 由 `feature_schema_version` 校验。客户端 cursor 不单独成为业务真值，可使用服务端签名的 opaque token 绑定 request、viewer 和下一 rank。
+
+### 索引、生命周期与安全
+
+- `match_preference_directions(direction_code, user_id)` 支持用户方向候选生成；
+- `project_role_skills(skill_name, required, role_id)` 支持岗位技能候选生成；
+- `project_members(role_id, status)` 支持容量检查；
+- `blocks(blocker_id, blocked_id)` 主唯一索引外，评估反向 `(blocked_id, blocker_id)` 查询；
+- `recommendation_requests(viewer_user_id, created_at)` 和 `expires_at` 支持历史查询与 TTL 清理；
+- `recommendation_candidates(request_id, rank)` 支持稳定分页；
+- `recommendation_impressions(viewer_user_id, received_at)` 支持合规反馈窗口。
+
+读取候选快照不能替代实时授权。返回页面和登记曝光前必须重新检查账号、公开状态、项目/岗位状态、成员容量和双向拉黑。过期请求、候选和曝光的保留周期属于隐私/模型数据政策，当前保持 `TBD`，禁止无期限保留。
+
 ## 1. 设计原则
 
 - 核心关系使用数据库约束保证，不只依赖应用代码；
