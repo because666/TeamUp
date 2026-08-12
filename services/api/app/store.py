@@ -6,7 +6,17 @@ from typing import Protocol
 from uuid import uuid4
 
 from .errors import ServiceError
-from .schemas import ProfileData, ProfilePayload, ProjectData, ProjectPayload, ProjectUpdate, RoleData
+from .schemas import (
+    MatchPreferencesData,
+    MatchPreferencesPayload,
+    ProfileData,
+    ProfilePayload,
+    ProjectData,
+    ProjectPayload,
+    ProjectUpdate,
+    RoleData,
+    RolePayload,
+)
 
 
 def now_utc() -> datetime:
@@ -19,6 +29,10 @@ class Store(Protocol):
     def logout(self, token: str) -> None: ...
     def get_profile(self, user_id: str) -> ProfileData | None: ...
     def save_profile(self, user_id: str, payload: ProfilePayload, version: int | None) -> ProfileData: ...
+    def get_match_preferences(self, user_id: str) -> MatchPreferencesData | None: ...
+    def save_match_preferences(
+        self, user_id: str, payload: MatchPreferencesPayload, version: int | None
+    ) -> MatchPreferencesData: ...
     def create_project(self, user_id: str, payload: ProjectPayload) -> ProjectData: ...
     def get_project(self, project_id: str) -> ProjectData: ...
     def update_project(self, user_id: str, project_id: str, payload: ProjectUpdate) -> ProjectData: ...
@@ -36,6 +50,7 @@ class MemoryStore:
         self.users_by_subject: dict[str, str] = {}
         self.sessions: dict[str, tuple[str, datetime]] = {}
         self.profiles: dict[str, ProfileData] = {}
+        self.match_preferences: dict[str, MatchPreferencesData] = {}
         self.projects: dict[str, ProjectData] = {}
 
     def ready(self) -> bool:
@@ -82,13 +97,41 @@ class MemoryStore:
             self.profiles[user_id] = saved
             return deepcopy(saved)
 
+    def get_match_preferences(self, user_id: str) -> MatchPreferencesData | None:
+        with self._lock:
+            return deepcopy(self.match_preferences.get(user_id))
+
+    def save_match_preferences(
+        self,
+        user_id: str,
+        payload: MatchPreferencesPayload,
+        version: int | None,
+    ) -> MatchPreferencesData:
+        with self._lock:
+            if user_id not in self.users_by_subject.values():
+                raise ServiceError("RESOURCE_NOT_FOUND", "用户不存在。", 404)
+            existing = self.match_preferences.get(user_id)
+            if existing and version != existing.version:
+                raise ServiceError("VERSION_CONFLICT", "匹配偏好已被更新，请重新加载后再保存。", 409)
+            if not existing and version not in (None, 0):
+                raise ServiceError("VERSION_CONFLICT", "匹配偏好版本已失效，请重新加载。", 409)
+            saved = MatchPreferencesData.model_validate(
+                {
+                    **payload.model_dump(),
+                    "version": existing.version + 1 if existing else 1,
+                    "updatedAt": now_utc(),
+                }
+            )
+            self.match_preferences[user_id] = saved
+            return deepcopy(saved)
+
     def create_project(self, user_id: str, payload: ProjectPayload) -> ProjectData:
         with self._lock:
             timestamp = now_utc()
             project_id = f"prj_{uuid4().hex}"
             data = ProjectData.model_validate(
                 {
-                    **payload.model_dump(),
+                    **payload.model_dump(exclude={"roles", "collaborationScenarios"}),
                     "id": project_id,
                     "ownerId": user_id,
                     "status": "DRAFT",
@@ -96,7 +139,8 @@ class MemoryStore:
                     "publishedAt": None,
                     "createdAt": timestamp,
                     "updatedAt": timestamp,
-                    "roles": [{**role.model_dump(), "id": f"role_{uuid4().hex}"} for role in payload.roles],
+                    "roles": [self._role_data(role, f"role_{uuid4().hex}") for role in payload.roles],
+                    "collaborationScenarios": payload.collaborationScenarios or [],
                 }
             )
             self.projects[project_id] = data
@@ -120,7 +164,7 @@ class MemoryStore:
             timestamp = now_utc()
             updated = ProjectData.model_validate(
                 {
-                    **payload.model_dump(exclude={"version"}),
+                    **payload.model_dump(exclude={"version", "roles", "collaborationScenarios"}),
                     "id": project.id,
                     "ownerId": project.ownerId,
                     "status": project.status,
@@ -129,12 +173,18 @@ class MemoryStore:
                     "createdAt": project.createdAt,
                     "updatedAt": timestamp,
                     "roles": [
-                        {
-                            **role.model_dump(),
-                            "id": project.roles[index].id if index < len(project.roles) else f"role_{uuid4().hex}",
-                        }
+                        self._role_data(
+                            role,
+                            project.roles[index].id if index < len(project.roles) else f"role_{uuid4().hex}",
+                            project.roles[index] if index < len(project.roles) else None,
+                        )
                         for index, role in enumerate(payload.roles)
                     ],
+                    "collaborationScenarios": (
+                        payload.collaborationScenarios
+                        if payload.collaborationScenarios is not None
+                        else project.collaborationScenarios
+                    ),
                 }
             )
             self.projects[project_id] = updated
@@ -197,3 +247,29 @@ class MemoryStore:
             raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可见。", 404)
         if project.ownerId != user_id:
             raise ServiceError("FORBIDDEN", "你没有权限操作该项目。", 403)
+
+    @staticmethod
+    def _role_data(role: RolePayload, role_id: str, existing: RoleData | None = None) -> dict:
+        skill_keys = {value.strip().casefold() for value in role.skills}
+        if role.requiredSkills is None:
+            existing_required_keys = (
+                {value.strip().casefold() for value in existing.requiredSkills} if existing else set()
+            )
+            required_skills = [
+                value for value in role.skills if value.strip().casefold() in existing_required_keys
+            ]
+        else:
+            required_skills = role.requiredSkills
+        required_slots = (
+            role.requiredAvailabilitySlots
+            if role.requiredAvailabilitySlots is not None
+            else existing.requiredAvailabilitySlots if existing else []
+        )
+        collaboration_role = role.collaborationRole or (existing.collaborationRole if existing else "MEMBER")
+        return {
+            **role.model_dump(exclude={"requiredSkills", "requiredAvailabilitySlots", "collaborationRole"}),
+            "id": role_id,
+            "requiredSkills": required_skills,
+            "requiredAvailabilitySlots": required_slots,
+            "collaborationRole": collaboration_role,
+        }

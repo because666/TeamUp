@@ -76,6 +76,53 @@ class ProfileScenarioRow(Base):
     scenario_name: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
+class MatchPreferenceRow(Base):
+    __tablename__ = "match_preferences"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    directions: Mapped[list[MatchPreferenceDirectionRow]] = relationship(cascade="all, delete-orphan", lazy="selectin")
+    availability_slots: Mapped[list[MatchPreferenceAvailabilitySlotRow]] = relationship(
+        cascade="all, delete-orphan", lazy="selectin"
+    )
+
+    __table_args__ = (CheckConstraint("version > 0", name="ck_match_preferences_version"),)
+
+
+class MatchPreferenceDirectionRow(Base):
+    __tablename__ = "match_preference_directions"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("match_preferences.user_id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    direction_code: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "direction_code", name="uq_match_preference_direction"),
+        Index("ix_match_preference_direction_code", "direction_code", "user_id"),
+    )
+
+
+class MatchPreferenceAvailabilitySlotRow(Base):
+    __tablename__ = "match_preference_availability_slots"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("match_preferences.user_id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Shanghai")
+    weekday: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_minute: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_minute: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("timezone = 'Asia/Shanghai'", name="ck_match_preference_slots_timezone"),
+        CheckConstraint("weekday BETWEEN 1 AND 7", name="ck_match_preference_slots_weekday"),
+        CheckConstraint("start_minute BETWEEN 0 AND 1439", name="ck_match_preference_slots_start"),
+        CheckConstraint("end_minute BETWEEN 1 AND 1440", name="ck_match_preference_slots_end"),
+        CheckConstraint("start_minute < end_minute", name="ck_match_preference_slots_range"),
+    )
+
+
 class ProjectRow(Base):
     __tablename__ = "projects"
 
@@ -94,6 +141,7 @@ class ProjectRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
     roles: Mapped[list[ProjectRoleRow]] = relationship(cascade="all, delete-orphan", lazy="selectin")
+    scenarios: Mapped[list[ProjectScenarioRow]] = relationship(cascade="all, delete-orphan", lazy="selectin")
     __table_args__ = (
         Index("ix_projects_status_published", "status", "published_at", "id"),
         CheckConstraint("status IN ('DRAFT','PUBLISHED','CLOSED')", name="ck_projects_status"),
@@ -112,13 +160,21 @@ class ProjectRoleRow(Base):
     hours_per_week: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str] = mapped_column(String(240), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="OPEN")
+    collaboration_role: Mapped[str] = mapped_column(String(16), nullable=False, default="MEMBER")
 
     skills: Mapped[list[ProjectRoleSkillRow]] = relationship(cascade="all, delete-orphan", lazy="selectin")
+    availability_slots: Mapped[list[ProjectRoleAvailabilitySlotRow]] = relationship(
+        cascade="all, delete-orphan", lazy="selectin"
+    )
     __table_args__ = (
         UniqueConstraint("project_id", "position", name="uq_project_roles_position"),
         CheckConstraint("headcount > 0", name="ck_project_roles_headcount"),
         CheckConstraint("hours_per_week BETWEEN 1 AND 40", name="ck_project_roles_hours_per_week"),
         CheckConstraint("status IN ('OPEN','CLOSED')", name="ck_project_roles_status"),
+        CheckConstraint(
+            "collaboration_role IN ('LEADER','MEMBER','FLEXIBLE')",
+            name="ck_project_roles_collaboration_role",
+        ),
     )
 
 
@@ -128,3 +184,35 @@ class ProjectRoleSkillRow(Base):
     role_id: Mapped[str] = mapped_column(String(40), ForeignKey("project_roles.id", ondelete="CASCADE"), primary_key=True)
     position: Mapped[int] = mapped_column(Integer, primary_key=True)
     skill_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (Index("ix_project_role_skills_skill_required", "skill_name", "required", "role_id"),)
+
+
+class ProjectRoleAvailabilitySlotRow(Base):
+    __tablename__ = "project_role_availability_slots"
+
+    role_id: Mapped[str] = mapped_column(String(40), ForeignKey("project_roles.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Shanghai")
+    weekday: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_minute: Mapped[int] = mapped_column(Integer, nullable=False)
+    end_minute: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("timezone = 'Asia/Shanghai'", name="ck_project_role_slots_timezone"),
+        CheckConstraint("weekday BETWEEN 1 AND 7", name="ck_project_role_slots_weekday"),
+        CheckConstraint("start_minute BETWEEN 0 AND 1439", name="ck_project_role_slots_start"),
+        CheckConstraint("end_minute BETWEEN 1 AND 1440", name="ck_project_role_slots_end"),
+        CheckConstraint("start_minute < end_minute", name="ck_project_role_slots_range"),
+    )
+
+
+class ProjectScenarioRow(Base):
+    __tablename__ = "project_collaboration_scenarios"
+
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scenario_code: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    __table_args__ = (UniqueConstraint("project_id", "scenario_code", name="uq_project_collaboration_scenario"),)

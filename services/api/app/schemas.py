@@ -1,12 +1,54 @@
 from datetime import datetime
-from typing import Generic, Literal, TypeVar
+from typing import Annotated, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 
 RolePreference = Literal["LEADER", "MEMBER", "FLEXIBLE"]
 ProjectStatus = Literal["DRAFT", "PUBLISHED", "CLOSED"]
 RoleStatus = Literal["OPEN", "CLOSED"]
+StructuredLabel = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
+
+
+def normalize_label(value: str) -> str:
+    return value.strip().casefold()
+
+
+def validate_unique_labels(values: list[str], field_name: str) -> list[str]:
+    normalized = [normalize_label(value) for value in values]
+    if any(not value for value in normalized):
+        raise ValueError(f"{field_name} must not contain empty values")
+    if len(set(normalized)) != len(normalized):
+        raise ValueError(f"{field_name} must not contain duplicate values")
+    return [value.strip() for value in values]
+
+
+class AvailabilitySlot(BaseModel):
+    timezone: Literal["Asia/Shanghai"] = "Asia/Shanghai"
+    weekday: int = Field(ge=1, le=7)
+    startMinute: int = Field(ge=0, le=1439)
+    endMinute: int = Field(ge=1, le=1440)
+
+    @model_validator(mode="after")
+    def validate_range(self):
+        if self.startMinute >= self.endMinute:
+            raise ValueError("startMinute must be before endMinute")
+        return self
+
+
+def validate_availability_slots(values: list[AvailabilitySlot], field_name: str) -> list[AvailabilitySlot]:
+    ordered = sorted(values, key=lambda item: (item.timezone, item.weekday, item.startMinute, item.endMinute))
+    previous_key: tuple[str, int] | None = None
+    latest_end = -1
+    for current in ordered:
+        current_key = (current.timezone, current.weekday)
+        if current_key != previous_key:
+            previous_key = current_key
+            latest_end = -1
+        if current.startMinute < latest_end:
+            raise ValueError(f"{field_name} must not contain overlapping slots")
+        latest_end = max(latest_end, current.endMinute)
+    return values
 
 
 class ApiError(BaseModel):
@@ -81,17 +123,72 @@ class ProfileUpdate(ProfilePayload):
     version: int = Field(default=0, ge=0)
 
 
+class MatchPreferencesPayload(BaseModel):
+    desiredDirections: list[StructuredLabel] = Field(default_factory=list, max_length=10)
+    availabilitySlots: list[AvailabilitySlot] = Field(default_factory=list, max_length=21)
+
+    @field_validator("desiredDirections")
+    @classmethod
+    def validate_directions(cls, value: list[str]) -> list[str]:
+        return validate_unique_labels(value, "desiredDirections")
+
+    @field_validator("availabilitySlots")
+    @classmethod
+    def validate_slots(cls, value: list[AvailabilitySlot]) -> list[AvailabilitySlot]:
+        return validate_availability_slots(value, "availabilitySlots")
+
+
+class MatchPreferencesUpdate(MatchPreferencesPayload):
+    version: int = Field(default=0, ge=0)
+
+
+class MatchPreferencesData(MatchPreferencesPayload):
+    version: int = Field(ge=1)
+    updatedAt: datetime
+
+
 class RolePayload(BaseModel):
     name: str = Field(min_length=1, max_length=48)
-    skills: list[str] = Field(min_length=1, max_length=20)
+    skills: list[StructuredLabel] = Field(min_length=1, max_length=20)
     headcount: int = Field(ge=1, le=100)
     hoursPerWeek: int = Field(ge=1, le=40)
     description: str = Field(default="", max_length=240)
     status: RoleStatus = "OPEN"
+    requiredSkills: list[StructuredLabel] | None = Field(default=None, max_length=20)
+    requiredAvailabilitySlots: list[AvailabilitySlot] | None = Field(default=None, max_length=21)
+    collaborationRole: RolePreference | None = None
+
+    @field_validator("skills")
+    @classmethod
+    def validate_skills(cls, value: list[str]) -> list[str]:
+        return validate_unique_labels(value, "skills")
+
+    @field_validator("requiredSkills")
+    @classmethod
+    def validate_required_skills(cls, value: list[str] | None) -> list[str] | None:
+        return None if value is None else validate_unique_labels(value, "requiredSkills")
+
+    @field_validator("requiredAvailabilitySlots")
+    @classmethod
+    def validate_required_slots(cls, value: list[AvailabilitySlot] | None) -> list[AvailabilitySlot] | None:
+        return None if value is None else validate_availability_slots(value, "requiredAvailabilitySlots")
+
+    @model_validator(mode="after")
+    def validate_required_subset(self):
+        if self.requiredSkills is None:
+            return self
+        skills = {normalize_label(value) for value in self.skills}
+        required = {normalize_label(value) for value in self.requiredSkills}
+        if not required.issubset(skills):
+            raise ValueError("requiredSkills must be a subset of skills")
+        return self
 
 
 class RoleData(RolePayload):
     id: str
+    requiredSkills: list[str] = Field(default_factory=list)
+    requiredAvailabilitySlots: list[AvailabilitySlot] = Field(default_factory=list)
+    collaborationRole: RolePreference = "MEMBER"
 
 
 class ProjectPayload(BaseModel):
@@ -102,6 +199,7 @@ class ProjectPayload(BaseModel):
     stage: str = Field(min_length=1, max_length=32)
     teamInfo: str = Field(default="", max_length=240)
     roles: list[RolePayload] = Field(min_length=1, max_length=20)
+    collaborationScenarios: list[StructuredLabel] | None = Field(default=None, max_length=10)
 
     @field_validator("title", "description", "direction", "stage", mode="before")
     @classmethod
@@ -109,6 +207,11 @@ class ProjectPayload(BaseModel):
         if not isinstance(value, str):
             return value
         return value.strip()
+
+    @field_validator("collaborationScenarios")
+    @classmethod
+    def validate_scenarios(cls, value: list[str] | None) -> list[str] | None:
+        return None if value is None else validate_unique_labels(value, "collaborationScenarios")
 
 
 class ProjectUpdate(ProjectPayload):
@@ -124,6 +227,7 @@ class ProjectData(ProjectPayload):
     createdAt: datetime
     updatedAt: datetime
     roles: list[RoleData]
+    collaborationScenarios: list[str] = Field(default_factory=list)
 
 
 class ProjectAction(BaseModel):

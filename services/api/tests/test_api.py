@@ -114,3 +114,86 @@ def test_project_owner_is_enforced() -> None:
         json={**project_payload(), "version": project["version"]},
     )
     assert response.status_code == 403
+
+
+def test_match_preferences_auth_validation_and_versioning() -> None:
+    client = make_client()
+    path = "/api/v1/me/match-preferences"
+    assert client.get(path).status_code == 401
+
+    token = login(client, "preferences")
+    headers = {"Authorization": f"Bearer {token}"}
+    empty = client.get(path, headers=headers)
+    assert empty.status_code == 200
+    assert empty.json()["data"] is None
+    assert empty.json()["meta"]["state"] == "INCOMPLETE"
+
+    payload = {
+        "desiredDirections": ["AI", "校园服务"],
+        "availabilitySlots": [
+            {"timezone": "Asia/Shanghai", "weekday": 6, "startMinute": 540, "endMinute": 720},
+            {"timezone": "Asia/Shanghai", "weekday": 7, "startMinute": 780, "endMinute": 900},
+        ],
+        "version": 0,
+    }
+    created = client.put(path, headers=headers, json=payload)
+    assert created.status_code == 200
+    assert created.json()["data"]["version"] == 1
+    assert client.get(path, headers=headers).json()["data"]["desiredDirections"] == ["AI", "校园服务"]
+
+    updated_payload = {**payload, "desiredDirections": ["科研"], "version": 1}
+    updated = client.put(path, headers=headers, json=updated_payload)
+    assert updated.status_code == 200
+    assert updated.json()["data"]["version"] == 2
+    assert client.put(path, headers=headers, json=updated_payload).status_code == 409
+
+    duplicate = {**payload, "desiredDirections": ["AI", " ai "]}
+    assert client.put(path, headers=headers, json=duplicate).status_code == 422
+    nested_overlap = {
+        **payload,
+        "availabilitySlots": [
+            {"weekday": 1, "startMinute": 480, "endMinute": 720},
+            {"weekday": 1, "startMinute": 500, "endMinute": 540},
+            {"weekday": 1, "startMinute": 600, "endMinute": 660},
+        ],
+    }
+    assert client.put(path, headers=headers, json=nested_overlap).status_code == 422
+
+
+def test_project_matching_fields_and_legacy_update_compatibility() -> None:
+    client = make_client()
+    token = login(client, "project-fields")
+    headers = {"Authorization": f"Bearer {token}"}
+    payload = project_payload()
+    payload["collaborationScenarios"] = ["竞赛", "科研"]
+    payload["roles"][0].update(
+        {
+            "requiredSkills": ["Python"],
+            "requiredAvailabilitySlots": [
+                {"weekday": 6, "startMinute": 540, "endMinute": 720}
+            ],
+            "collaborationRole": "MEMBER",
+        }
+    )
+    created = client.post("/api/v1/projects", headers=headers, json=payload)
+    assert created.status_code == 200
+    project = created.json()["data"]
+    assert project["collaborationScenarios"] == ["竞赛", "科研"]
+    assert project["roles"][0]["requiredSkills"] == ["Python"]
+    assert project["roles"][0]["requiredAvailabilitySlots"][0]["weekday"] == 6
+
+    legacy_payload = {**project_payload(), "title": "旧客户端更新", "version": project["version"]}
+    updated = client.patch(
+        f"/api/v1/projects/{project['id']}",
+        headers=headers,
+        json=legacy_payload,
+    )
+    assert updated.status_code == 200
+    updated_data = updated.json()["data"]
+    assert updated_data["collaborationScenarios"] == ["竞赛", "科研"]
+    assert updated_data["roles"][0]["requiredSkills"] == ["Python"]
+    assert updated_data["roles"][0]["requiredAvailabilitySlots"][0]["weekday"] == 6
+
+    invalid = project_payload()
+    invalid["roles"][0]["requiredSkills"] = ["Go"]
+    assert client.post("/api/v1/projects", headers=headers, json=invalid).status_code == 422

@@ -3,13 +3,13 @@
 > Status: Proposed<br>
 > Owner: 角色 B<br>
 > Reviewers: 角色 A<br>
-> Last Updated: 2026-08-11
+> Last Updated: 2026-08-12
 
 ## 基础实现状态
 
 FastAPI 基础实现目前已覆盖 `/api/v1` 下的健康检查、微信真实/local 登录、退出、当前用户名片，以及项目创建、详情、更新、发布、关闭和公开列表。
 
-实现返回约定的 `data`/`meta`/`requestId` 信封和结构化错误，并已支持 local/test memory 与 MySQL 8 持久化。`match-v0.1` 纯规则引擎已实现；本节新增的匹配 API 和数据字段仍是 [ADR-0005](../decisions/ADR-0005-matching-api-data-contract.md) 下的 Proposed 契约，尚未发布路由或迁移。
+实现返回约定的 `data`/`meta`/`requestId` 信封和结构化错误，并已支持 local/test memory 与 MySQL 8 持久化。`match-v0.1` 纯规则引擎已实现。用户已明确授权按 [ADR-0005](../decisions/ADR-0005-matching-api-data-contract.md) 推荐方案实施首批匹配输入；`role-b/feature/TUP-20260812-match-preferences` 已实现下述偏好路由、项目字段和第二版迁移，但 ADR 和本文仍为 Proposed，合入 `main` 前必须由角色 A 评审。
 
 ### 微信真实登录
 
@@ -126,7 +126,7 @@ FastAPI 基础实现目前已覆盖 `/api/v1` 下的健康检查、微信真实/
 
 ## 7. 关键 DTO 最小字段
 
-### 匹配输入扩展（Proposed）
+### 匹配输入扩展（Proposed，任务分支已实现）
 
 为避免给现有 `PUT /me/profile` 增加字段后被旧客户端整资源覆盖，方向和时间偏好使用独立资源：
 
@@ -146,14 +146,14 @@ FastAPI 基础实现目前已覆盖 `/api/v1` 下的健康检查、微信真实/
 }
 ```
 
-- `desiredDirections` 使用角色 A 确认的受控方向词表，建议 `1..10` 项；
-- `availabilitySlots` 建议最多 21 项，`weekday` 为 `1..7`，分钟范围为当天 `0..1440`，同一时区/星期不能重叠；P0 推荐只接受 `Asia/Shanghai`，避免未定义的跨时区周期和夏令时语义；
+- `desiredDirections` 为 `0..10` 项，每项为去除首尾空格后的 `1..64` 字符且大小写不敏感去重；受控方向词表仍待角色 A 提供，在此之前后端不从自由文本推断方向；
+- `availabilitySlots` 最多 21 项，`weekday` 为 `1..7`，分钟范围为当天 `0..1440`，同一时区/星期不能重叠；P0 只接受 `Asia/Shanghai`，避免未定义的跨时区周期和夏令时语义；
 - `PUT /me/match-preferences` 使用 `version` 乐观锁；尚未创建时 `version=0`；
-- GET 返回完整 DTO；PUT 请求不传 `updatedAt`，成功响应返回服务端的新 `version` 和 `updatedAt`；
+- 尚未创建时 GET 返回 `data: null` 和 `meta.state: INCOMPLETE`；已创建时返回完整 DTO 和 `meta.state: COMPLETE`；PUT 请求不传 `updatedAt`，成功响应返回服务端的新 `version` 和 `updatedAt`；
 - 空数组表示用户明确暂不提供，不从简介、专业或定位信息推断；
 - 用户关闭名片公开后，该资源仍可编辑，但不会进入新的他人匹配结果。
 
-现有岗位 DTO Proposed 新增：
+现有岗位 DTO Proposed 新增（任务分支已实现）：
 
 ```json
 {
@@ -164,11 +164,11 @@ FastAPI 基础实现目前已覆盖 `/api/v1` 下的健康检查、微信真实/
 }
 ```
 
-- `skills` 和 `requiredSkills` 均必须去重，且 `requiredSkills` 是 `skills` 的子集；历史和新建时省略 required 均为 `[]`；
+- `skills` 和 `requiredSkills` 每项为 `1..64` 字符、均必须大小写不敏感去重，且 `requiredSkills` 是 `skills` 的子集；历史和新建时省略 required 均为 `[]`；
 - 更新既有项目时，旧客户端省略 `requiredSkills` 表示保留原值，并与新的 `skills` 取交集，不能隐式新增 required；
 - `requiredAvailabilitySlots` 使用相同时间段 DTO；为空时只比较现有 `hoursPerWeek`，不作时间段硬过滤；
-- `collaborationRole` Proposed 枚举为 `LEADER | MEMBER | FLEXIBLE`，历史岗位迁移为 `MEMBER`；
-- 项目层 Proposed 增加 `collaborationScenarios`，与用户名片已有字段使用同一受控枚举。
+- `collaborationRole` 枚举为 `LEADER | MEMBER | FLEXIBLE`，历史岗位迁移为 `MEMBER`；
+- 项目层增加 `collaborationScenarios`；新建省略时为 `[]`，更新省略时保留原值。它与用户名片已有字段应使用同一受控枚举，该词表仍待角色 A 提供。
 
 专业和经历因素在受控专业分类及独立 experience 契约落地前必须保持 missing，不允许用自由文本 `major`、`bio` 或项目说明猜分。
 

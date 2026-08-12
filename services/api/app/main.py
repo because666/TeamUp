@@ -16,6 +16,9 @@ from .schemas import (
     HealthData,
     LoginRequest,
     LogoutData,
+    MatchPreferencesData,
+    MatchPreferencesPayload,
+    MatchPreferencesUpdate,
     ProfileData,
     ProfilePayload,
     ProfileUpdate,
@@ -59,7 +62,13 @@ def make_app(
         title="TeamUp API",
         version="0.1.0",
         description="TeamUp P0 backend with configurable local memory or MySQL persistence.",
-        openapi_tags=[{"name": "system"}, {"name": "auth"}, {"name": "profile"}, {"name": "projects"}],
+        openapi_tags=[
+            {"name": "system"},
+            {"name": "auth"},
+            {"name": "profile"},
+            {"name": "matching"},
+            {"name": "projects"},
+        ],
     )
     app.add_middleware(
         CORSMiddleware,
@@ -138,6 +147,36 @@ def make_app(
     def save_profile(payload: ProfileUpdate, request: Request, user_id: str = Depends(current_user)):
         profile = app_store.save_profile(user_id, ProfilePayload.model_validate(payload.model_dump(exclude={"version"})), payload.version)
         return envelope(request, profile.model_dump(mode="json"))
+
+    @api.get(
+        "/me/match-preferences",
+        tags=["matching"],
+        response_model=Envelope[MatchPreferencesData | None],
+    )
+    def get_match_preferences(request: Request, user_id: str = Depends(current_user)):
+        preferences = app_store.get_match_preferences(user_id)
+        return envelope(
+            request,
+            preferences.model_dump(mode="json") if preferences else None,
+            {"state": "COMPLETE" if preferences else "INCOMPLETE"},
+        )
+
+    @api.put(
+        "/me/match-preferences",
+        tags=["matching"],
+        response_model=Envelope[MatchPreferencesData],
+    )
+    def save_match_preferences(
+        payload: MatchPreferencesUpdate,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ):
+        preferences = app_store.save_match_preferences(
+            user_id,
+            MatchPreferencesPayload.model_validate(payload.model_dump(exclude={"version"})),
+            payload.version,
+        )
+        return envelope(request, preferences.model_dump(mode="json"))
 
     @api.post("/projects", tags=["projects"], response_model=Envelope[ProjectData])
     def create_project(payload: ProjectPayload, request: Request, user_id: str = Depends(current_user)):

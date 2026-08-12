@@ -25,6 +25,7 @@
 - [TUP-20260811-mysql-persistence](TUP-20260811-mysql-persistence.md)
 - [TUP-20260811-match-v0-1](TUP-20260811-match-v0-1.md)
 - [TUP-20260811-match-api-data-contract](TUP-20260811-match-api-data-contract.md)
+- [TUP-20260812-match-preferences](TUP-20260812-match-preferences.md)
 
 跨角色评审：
 
@@ -35,3 +36,4 @@
 - [TUP-20260811-mysql-persistence-review](../reviews/TUP-20260811-mysql-persistence-review.md)
 - [TUP-20260811-match-v0-1-review](../reviews/TUP-20260811-match-v0-1-review.md)
 - [TUP-20260811-match-api-data-contract-review](../reviews/TUP-20260811-match-api-data-contract-review.md)
+- [TUP-20260812-match-preferences-review](../reviews/TUP-20260812-match-preferences-review.md)

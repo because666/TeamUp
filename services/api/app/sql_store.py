@@ -10,17 +10,31 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from .db_models import (
+    MatchPreferenceAvailabilitySlotRow,
+    MatchPreferenceDirectionRow,
+    MatchPreferenceRow,
     ProfileRow,
     ProfileScenarioRow,
     ProfileSkillRow,
+    ProjectRoleAvailabilitySlotRow,
     ProjectRoleRow,
     ProjectRoleSkillRow,
     ProjectRow,
+    ProjectScenarioRow,
     SessionRow,
     UserRow,
 )
 from .errors import ServiceError
-from .schemas import ProfileData, ProfilePayload, ProjectData, ProjectPayload, ProjectUpdate, RoleData
+from .schemas import (
+    MatchPreferencesData,
+    MatchPreferencesPayload,
+    ProfileData,
+    ProfilePayload,
+    ProjectData,
+    ProjectPayload,
+    ProjectUpdate,
+    RoleData,
+)
 
 
 def db_now() -> datetime:
@@ -139,6 +153,42 @@ class SqlAlchemyStore:
             session.flush()
             return self._profile_data(row)
 
+    def get_match_preferences(self, user_id: str) -> MatchPreferencesData | None:
+        with self._session_factory() as session:
+            row = session.scalar(self._match_preferences_query().where(MatchPreferenceRow.user_id == user_id))
+            return self._match_preferences_data(row) if row else None
+
+    def save_match_preferences(
+        self,
+        user_id: str,
+        payload: MatchPreferencesPayload,
+        version: int | None,
+    ) -> MatchPreferencesData:
+        with self._session_factory.begin() as session:
+            user = session.scalar(select(UserRow).where(UserRow.id == user_id).with_for_update())
+            if user is None:
+                raise ServiceError("RESOURCE_NOT_FOUND", "用户不存在。", 404)
+            row = session.scalar(
+                self._match_preferences_query()
+                .where(MatchPreferenceRow.user_id == user_id)
+                .with_for_update()
+            )
+            if row and version != row.version:
+                raise ServiceError("VERSION_CONFLICT", "匹配偏好已被更新，请重新加载后再保存。", 409)
+            if not row and version not in (None, 0):
+                raise ServiceError("VERSION_CONFLICT", "匹配偏好版本已失效，请重新加载。", 409)
+
+            timestamp = db_now()
+            if row is None:
+                row = MatchPreferenceRow(user_id=user_id, version=1, updated_at=timestamp)
+                session.add(row)
+            else:
+                row.version += 1
+                row.updated_at = timestamp
+            self._apply_match_preferences(row, payload)
+            session.flush()
+            return self._match_preferences_data(row)
+
     def create_project(self, user_id: str, payload: ProjectPayload) -> ProjectData:
         with self._session_factory.begin() as session:
             if session.get(UserRow, user_id) is None:
@@ -160,6 +210,7 @@ class SqlAlchemyStore:
                 updated_at=timestamp,
             )
             self._replace_roles(row, payload.roles)
+            self._replace_project_scenarios(row, payload.collaborationScenarios or [])
             session.add(row)
             session.flush()
             return self._project_data(row)
@@ -187,10 +238,12 @@ class SqlAlchemyStore:
             row.team_info = payload.teamInfo
             row.version += 1
             row.updated_at = db_now()
-            existing_ids = [role.id for role in row.roles]
+            existing_roles = self._project_data(row).roles
             row.roles.clear()
             session.flush()
-            self._replace_roles(row, payload.roles, existing_ids)
+            self._replace_roles(row, payload.roles, existing_roles)
+            if payload.collaborationScenarios is not None:
+                self._replace_project_scenarios(row, payload.collaborationScenarios)
             session.flush()
             return self._project_data(row)
 
@@ -248,8 +301,19 @@ class SqlAlchemyStore:
         return select(ProfileRow).options(selectinload(ProfileRow.skills), selectinload(ProfileRow.scenarios))
 
     @staticmethod
+    def _match_preferences_query() -> Select[tuple[MatchPreferenceRow]]:
+        return select(MatchPreferenceRow).options(
+            selectinload(MatchPreferenceRow.directions),
+            selectinload(MatchPreferenceRow.availability_slots),
+        )
+
+    @staticmethod
     def _project_query() -> Select[tuple[ProjectRow]]:
-        return select(ProjectRow).options(selectinload(ProjectRow.roles).selectinload(ProjectRoleRow.skills))
+        return select(ProjectRow).options(
+            selectinload(ProjectRow.roles).selectinload(ProjectRoleRow.skills),
+            selectinload(ProjectRow.roles).selectinload(ProjectRoleRow.availability_slots),
+            selectinload(ProjectRow.scenarios),
+        )
 
     @staticmethod
     def _apply_profile(row: ProfileRow, payload: ProfilePayload) -> None:
@@ -268,23 +332,86 @@ class SqlAlchemyStore:
         ]
 
     @staticmethod
-    def _replace_roles(row: ProjectRow, payload_roles: list, existing_ids: list[str] | None = None) -> None:
-        existing_ids = existing_ids or []
-        row.roles = [
-            ProjectRoleRow(
-                id=existing_ids[index] if index < len(existing_ids) else f"role_{uuid4().hex}",
+    def _apply_match_preferences(row: MatchPreferenceRow, payload: MatchPreferencesPayload) -> None:
+        row.directions = [
+            MatchPreferenceDirectionRow(position=index, direction_code=value)
+            for index, value in enumerate(payload.desiredDirections)
+        ]
+        row.availability_slots = [
+            MatchPreferenceAvailabilitySlotRow(
                 position=index,
-                name=role.name,
-                headcount=role.headcount,
-                hours_per_week=role.hoursPerWeek,
-                description=role.description,
-                status=role.status,
-                skills=[
-                    ProjectRoleSkillRow(position=skill_index, skill_name=skill)
-                    for skill_index, skill in enumerate(role.skills)
-                ],
+                timezone=slot.timezone,
+                weekday=slot.weekday,
+                start_minute=slot.startMinute,
+                end_minute=slot.endMinute,
             )
-            for index, role in enumerate(payload_roles)
+            for index, slot in enumerate(payload.availabilitySlots)
+        ]
+
+    @staticmethod
+    def _replace_roles(
+        row: ProjectRow,
+        payload_roles: list,
+        existing_roles: list[RoleData] | None = None,
+    ) -> None:
+        existing_roles = existing_roles or []
+        role_rows: list[ProjectRoleRow] = []
+        for index, role in enumerate(payload_roles):
+            existing = existing_roles[index] if index < len(existing_roles) else None
+            required_keys = {
+                value.strip().casefold()
+                for value in (
+                    role.requiredSkills
+                    if role.requiredSkills is not None
+                    else existing.requiredSkills if existing else []
+                )
+            }
+            slot_payloads = (
+                role.requiredAvailabilitySlots
+                if role.requiredAvailabilitySlots is not None
+                else existing.requiredAvailabilitySlots if existing else []
+            )
+            role_rows.append(
+                ProjectRoleRow(
+                    id=existing.id if existing else f"role_{uuid4().hex}",
+                    position=index,
+                    name=role.name,
+                    headcount=role.headcount,
+                    hours_per_week=role.hoursPerWeek,
+                    description=role.description,
+                    status=role.status,
+                    collaboration_role=(
+                        role.collaborationRole
+                        if role.collaborationRole is not None
+                        else existing.collaborationRole if existing else "MEMBER"
+                    ),
+                    skills=[
+                        ProjectRoleSkillRow(
+                            position=skill_index,
+                            skill_name=skill,
+                            required=skill.strip().casefold() in required_keys,
+                        )
+                        for skill_index, skill in enumerate(role.skills)
+                    ],
+                    availability_slots=[
+                        ProjectRoleAvailabilitySlotRow(
+                            position=slot_index,
+                            timezone=slot.timezone,
+                            weekday=slot.weekday,
+                            start_minute=slot.startMinute,
+                            end_minute=slot.endMinute,
+                        )
+                        for slot_index, slot in enumerate(slot_payloads)
+                    ],
+                )
+            )
+        row.roles = role_rows
+
+    @staticmethod
+    def _replace_project_scenarios(row: ProjectRow, scenarios: list[str]) -> None:
+        row.scenarios = [
+            ProjectScenarioRow(position=index, scenario_code=value)
+            for index, value in enumerate(scenarios)
         ]
 
     @staticmethod
@@ -309,6 +436,27 @@ class SqlAlchemyStore:
         )
 
     @staticmethod
+    def _match_preferences_data(row: MatchPreferenceRow) -> MatchPreferencesData:
+        return MatchPreferencesData.model_validate(
+            {
+                "desiredDirections": [
+                    item.direction_code for item in sorted(row.directions, key=lambda item: item.position)
+                ],
+                "availabilitySlots": [
+                    {
+                        "timezone": item.timezone,
+                        "weekday": item.weekday,
+                        "startMinute": item.start_minute,
+                        "endMinute": item.end_minute,
+                    }
+                    for item in sorted(row.availability_slots, key=lambda item: item.position)
+                ],
+                "version": row.version,
+                "updatedAt": api_datetime(row.updated_at),
+            }
+        )
+
+    @staticmethod
     def _project_data(row: ProjectRow) -> ProjectData:
         roles = sorted(row.roles, key=lambda item: item.position)
         return ProjectData.model_validate(
@@ -321,6 +469,9 @@ class SqlAlchemyStore:
                 "competition": row.competition,
                 "stage": row.stage,
                 "teamInfo": row.team_info,
+                "collaborationScenarios": [
+                    item.scenario_code for item in sorted(row.scenarios, key=lambda item: item.position)
+                ],
                 "status": row.status,
                 "version": row.version,
                 "publishedAt": api_datetime(row.published_at),
@@ -334,6 +485,21 @@ class SqlAlchemyStore:
                             "skills": [
                                 item.skill_name for item in sorted(role.skills, key=lambda item: item.position)
                             ],
+                            "requiredSkills": [
+                                item.skill_name
+                                for item in sorted(role.skills, key=lambda item: item.position)
+                                if item.required
+                            ],
+                            "requiredAvailabilitySlots": [
+                                {
+                                    "timezone": item.timezone,
+                                    "weekday": item.weekday,
+                                    "startMinute": item.start_minute,
+                                    "endMinute": item.end_minute,
+                                }
+                                for item in sorted(role.availability_slots, key=lambda item: item.position)
+                            ],
+                            "collaborationRole": role.collaboration_role,
                             "headcount": role.headcount,
                             "hoursPerWeek": role.hours_per_week,
                             "description": role.description,

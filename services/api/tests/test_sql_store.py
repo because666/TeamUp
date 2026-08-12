@@ -6,7 +6,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.db_models import Base, SessionRow, UserRow
 from app.errors import ServiceError
-from app.schemas import ProfilePayload, ProjectPayload, ProjectUpdate
+from app.schemas import MatchPreferencesPayload, ProfilePayload, ProjectPayload, ProjectUpdate
 from app.sql_store import SqlAlchemyStore, db_now, token_digest
 
 
@@ -174,3 +174,56 @@ def test_project_owner_version_roles_and_pagination(sql_store) -> None:
     assert {first_page[0].id, second_page[0].id} == {published_first.id, published_second.id}
     assert cursor is not None
     assert next_cursor is None
+
+
+def test_match_preferences_and_project_constraints_survive_recreation(sql_store) -> None:
+    store, factory, engine = sql_store
+    user_id, _, _ = store.login("wechat:app-a:matching-fields")
+    preferences_payload = MatchPreferencesPayload.model_validate(
+        {
+            "desiredDirections": ["AI", "科研"],
+            "availabilitySlots": [
+                {"weekday": 6, "startMinute": 540, "endMinute": 720},
+                {"weekday": 7, "startMinute": 780, "endMinute": 900},
+            ],
+        }
+    )
+    preferences = store.save_match_preferences(user_id, preferences_payload, 0)
+
+    project_input = project_payload("结构化约束项目").model_dump()
+    project_input["collaborationScenarios"] = ["竞赛", "科研"]
+    project_input["roles"][0].update(
+        {
+            "skills": ["Python", "MySQL"],
+            "requiredSkills": ["Python"],
+            "requiredAvailabilitySlots": [
+                {"weekday": 6, "startMinute": 540, "endMinute": 720}
+            ],
+            "collaborationRole": "MEMBER",
+        }
+    )
+    project = store.create_project(user_id, ProjectPayload.model_validate(project_input))
+
+    recreated = SqlAlchemyStore(factory, engine)
+    assert recreated.get_match_preferences(user_id) == preferences
+    assert recreated.get_project(project.id) == project
+
+    legacy_update = project_payload("旧客户端更新").model_dump()
+    legacy_update["roles"][0]["skills"] = ["Python", "MySQL"]
+    updated = recreated.update_project(
+        user_id,
+        project.id,
+        ProjectUpdate.model_validate({**legacy_update, "version": project.version}),
+    )
+    assert updated.collaborationScenarios == ["竞赛", "科研"]
+    assert updated.roles[0].requiredSkills == ["Python"]
+    assert updated.roles[0].requiredAvailabilitySlots[0].weekday == 6
+
+    changed_skills = project_payload("移除必需技能").model_dump()
+    changed_skills["roles"][0]["skills"] = ["MySQL"]
+    removed = recreated.update_project(
+        user_id,
+        project.id,
+        ProjectUpdate.model_validate({**changed_skills, "version": updated.version}),
+    )
+    assert removed.roles[0].requiredSkills == []

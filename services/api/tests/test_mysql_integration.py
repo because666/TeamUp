@@ -11,7 +11,7 @@ from app.config import Settings
 from app.db_models import SessionRow
 from app.errors import ServiceError
 from app.main import make_app
-from app.schemas import ProfilePayload, ProjectPayload, ProjectUpdate
+from app.schemas import MatchPreferencesPayload, ProfilePayload, ProjectPayload, ProjectUpdate
 from app.sql_store import SqlAlchemyStore, token_digest
 
 
@@ -40,10 +40,16 @@ def project_payload() -> ProjectPayload:
             "description": "验证项目和岗位持久化",
             "direction": "后端",
             "stage": "IDEA",
+            "collaborationScenarios": ["竞赛"],
             "roles": [
                 {
                     "name": "后端开发",
                     "skills": ["Python", "MySQL"],
+                    "requiredSkills": ["Python"],
+                    "requiredAvailabilitySlots": [
+                        {"weekday": 6, "startMinute": 540, "endMinute": 720}
+                    ],
+                    "collaborationRole": "MEMBER",
                     "headcount": 1,
                     "hoursPerWeek": 8,
                 }
@@ -90,6 +96,18 @@ def test_mysql_persistence_token_digest_and_concurrent_profile_creation() -> Non
         assert [error.code for error in failures] == ["VERSION_CONFLICT"]
 
         updated_profile = store.save_profile(user_id, profile_payload("持久化更新"), successes[0].version)
+        preferences = store.save_match_preferences(
+            user_id,
+            MatchPreferencesPayload.model_validate(
+                {
+                    "desiredDirections": ["后端", "AI"],
+                    "availabilitySlots": [
+                        {"weekday": 6, "startMinute": 540, "endMinute": 720}
+                    ],
+                }
+            ),
+            0,
+        )
 
         project = store.create_project(user_id, project_payload())
         replacement = project_payload().model_dump()
@@ -97,7 +115,7 @@ def test_mysql_persistence_token_digest_and_concurrent_profile_creation() -> Non
         replacement["roles"] = [
             {
                 "name": "测试工程师",
-                "skills": ["Pytest"],
+                "skills": ["Python", "Pytest"],
                 "headcount": 2,
                 "hoursPerWeek": 6,
                 "description": "验证岗位替换",
@@ -114,7 +132,10 @@ def test_mysql_persistence_token_digest_and_concurrent_profile_creation() -> Non
         recreated = SqlAlchemyStore(factory, engine)
         assert recreated.user_for_token(token) == user_id
         assert recreated.get_profile(user_id) == updated_profile
+        assert recreated.get_match_preferences(user_id) == preferences
         assert recreated.get_project(project.id) == published
+        assert published.collaborationScenarios == ["竞赛"]
+        assert published.roles[0].requiredSkills == ["Python"]
     finally:
         engine.dispose()
 

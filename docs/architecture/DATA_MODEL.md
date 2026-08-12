@@ -3,11 +3,11 @@
 > Status: Proposed<br>
 > Owner: 角色 B<br>
 > Reviewers: 角色 A<br>
-> Last Updated: 2026-08-11
+> Last Updated: 2026-08-12
 
 ## 基础实现状态
 
-首个 FastAPI 切片保留 local/test 内存适配器，并按 [ADR-0004](../decisions/ADR-0004-mysql-data-access.md) 实现了 MySQL 8 持久化适配器。初始 Alembic 迁移已在 MySQL 8.4.11 验证 upgrade、downgrade 和再次 upgrade；当前只落地身份、会话、名片、项目及岗位，后续实体仍是 Proposed。
+首个 FastAPI 切片保留 local/test 内存适配器，并按 [ADR-0004](../decisions/ADR-0004-mysql-data-access.md) 实现了 MySQL 8 持久化适配器。初始 Alembic 迁移已在 MySQL 8.4.11 验证 upgrade、downgrade 和再次 upgrade。任务分支 `role-b/feature/TUP-20260812-match-preferences` 新增第二版迁移；该分支上的物理实现已通过 SQLite 与 MySQL 8.4 升降级和 schema check，但合入 `main` 和 ADR Accepted 仍需角色 A 评审。
 
 首批已实现物理表：
 
@@ -21,24 +21,29 @@
 | `projects` | 项目主体 | owner 外键、状态/版本检查、列表索引 |
 | `project_roles` | 招募岗位 | 项目外键、岗位位置唯一、人数/时间/状态检查 |
 | `project_role_skills` | 有序岗位技能 | `(role_id, position)` 主键 |
+| `match_preferences` | 当前用户匹配偏好 | 用户主键/外键、独立版本检查 |
+| `match_preference_directions` | 有序方向偏好 | `(user_id, position)` 主键、用户/方向唯一 |
+| `match_preference_availability_slots` | 有序用户可用时间段 | `(user_id, position)` 主键、范围检查 |
+| `project_collaboration_scenarios` | 有序项目协作场景 | `(project_id, position)` 主键、项目/场景唯一 |
+| `project_role_availability_slots` | 有序岗位必需时间段 | `(role_id, position)` 主键、范围检查 |
 
 数据库时间以 UTC 秒精度写入，API 输出恢复为带 UTC 时区的时间。原始平台 token、微信 `session_key`、AppSecret 和数据库连接串不得进入业务表。
 
 ## 匹配接入数据扩展（Proposed）
 
-以下结构属于 [ADR-0005](../decisions/ADR-0005-matching-api-data-contract.md) 提案。角色 A 评审、ADR Accepted 和独立迁移任务完成前，不代表已存在物理表。
+以下结构属于 [ADR-0005](../decisions/ADR-0005-matching-api-data-contract.md) 提案。用户已授权实现首批匹配输入，因此表中标为“已实现”的结构已存在于当前任务分支；这不等同于 ADR Accepted 或已合入 `main`。其余结构仍禁止按既成事实描述。
 
 ### 结构化匹配输入
 
 | 结构 | Proposed 字段/变化 | 关键约束与兼容策略 |
 | --- | --- | --- |
-| `match_preferences` | `user_id`, `version`, `updated_at` | 一个用户一份匹配偏好；独立乐观锁，避免旧 profile PUT 清空新字段 |
-| `project_role_skills` | 增加 `required BOOLEAN NOT NULL DEFAULT FALSE` | 历史记录全部为 `false`；同岗位至少保留一个技能；required 必须属于岗位 skills |
-| `match_preference_directions` | `user_id`, `direction_code`, `position` | FK 到 match preferences；用户主动选择；组合唯一；使用受控方向词表，不从简介推断 |
-| `match_preference_availability_slots` | `id`, `user_id`, `timezone`, `weekday`, `start_minute`, `end_minute` | FK 到 match preferences；`weekday 1..7`，`0 <= start < end <= 1440`；时间段不得重叠；P0 推荐仅 `Asia/Shanghai`；每周小时仍保留在 profile |
-| `project_roles` | 增加 `collaboration_role` | Proposed 枚举 `LEADER/MEMBER/FLEXIBLE`；历史迁移为 `MEMBER` |
-| `project_role_availability_slots` | `id`, `role_id`, `timezone`, `weekday`, `start_minute`, `end_minute` | 空集合表示无硬时间段；非空时用于重叠过滤和时间因素 |
-| `project_collaboration_scenarios` | `project_id`, `scenario_code`, `position` | 与 profile collaboration scenarios 使用同一受控词表 |
+| `match_preferences`（已实现） | `user_id`, `version`, `updated_at` | 一个用户一份匹配偏好；独立乐观锁，避免旧 profile PUT 清空新字段 |
+| `project_role_skills`（已实现） | 增加 `required BOOLEAN NOT NULL DEFAULT FALSE` | 历史记录全部为 `false`；同岗位至少保留一个技能；required 必须属于岗位 skills |
+| `match_preference_directions`（已实现） | `user_id`, `direction_code`, `position` | FK 到 match preferences；`(user_id, position)` 主键；用户/方向组合唯一；不从简介推断 |
+| `match_preference_availability_slots`（已实现） | `user_id`, `position`, `timezone`, `weekday`, `start_minute`, `end_minute` | `(user_id, position)` 主键；`weekday 1..7`，`0 <= start < end <= 1440`；应用层拒绝时间段重叠；P0 仅 `Asia/Shanghai`；每周小时仍保留在 profile |
+| `project_roles`（已实现） | 增加 `collaboration_role` | 枚举 `LEADER/MEMBER/FLEXIBLE`；历史迁移为 `MEMBER` |
+| `project_role_availability_slots`（已实现） | `role_id`, `position`, `timezone`, `weekday`, `start_minute`, `end_minute` | `(role_id, position)` 主键；空集合表示无硬时间段；非空时用于重叠过滤和时间因素 |
+| `project_collaboration_scenarios`（已实现） | `project_id`, `scenario_code`, `position` | `(project_id, position)` 主键；项目/场景组合唯一；应与 profile collaboration scenarios 使用同一受控词表 |
 | `experiences` | `id`, `user_id`, `type`, `title`, `direction_code`, `description`, `verification_status`, `visibility`, `started_at`, `ended_at` | 自述与认证分开；AI 不可写 `VERIFIED`；仅公开记录参与他人匹配 |
 | `experience_skills` | `experience_id`, `skill_name`, `position` | 使用同一版本化技能词表；不从自由文本自动补标签 |
 | `project_members` | `project_id`, `user_id`, `role_id`, `status`, `joined_at` | 活跃成员组合唯一；容量计算只统计受控活跃状态 |
