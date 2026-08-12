@@ -66,6 +66,7 @@
 - [项目成员与岗位容量角色 A 评审](status/reviews/TUP-20260812-project-members-review.md)：角色 A 对容量展示、成员列表权限和邀请前置边界的验收入口。
 - [用户拉黑与安全过滤角色 A 评审](status/reviews/TUP-20260812-user-blocks-review.md)：角色 A 对拉黑幂等、隐私反馈和跨模块阻断边界的验收入口。
 - [项目岗位邀请角色 A 评审](status/reviews/TUP-20260812-project-invitations-review.md)：角色 A 对邀请有效期、状态机、权限、容量和拉黑边界的验收入口。
+- [双人会话与文本消息角色 A 评审](status/reviews/TUP-20260812-conversations-messages-review.md)：角色 A 对会话上下文、消息幂等、分页、权限和拉黑边界的验收入口。
 - [任务模板](status/templates/TASK_TEMPLATE.md)、[交接模板](status/templates/HANDOFF_TEMPLATE.md) 和 [模型发布模板](status/templates/MODEL_RELEASE_TEMPLATE.md)。
 
 ## 历史来源

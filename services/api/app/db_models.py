@@ -306,3 +306,59 @@ class InvitationRow(Base):
             name="ck_invitations_pending_key",
         ),
     )
+
+
+class ConversationRow(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id", ondelete="RESTRICT"), nullable=False)
+    conversation_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index("ix_conversations_project_created", "project_id", "created_at", "id"),
+    )
+
+
+class ConversationParticipantRow(Base):
+    __tablename__ = "conversation_participants"
+
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), primary_key=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE")
+    joined_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index("ix_conversation_participants_user_status", "user_id", "status", "conversation_id"),
+        CheckConstraint("status IN ('ACTIVE')", name="ck_conversation_participants_status"),
+    )
+
+
+class MessageRow(Base):
+    __tablename__ = "messages"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    sender_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    client_message_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    type: Mapped[str] = mapped_column(String(16), nullable=False, default="TEXT")
+    content: Mapped[str] = mapped_column(String(1000), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="SENT")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["conversation_id", "sender_id"],
+            ["conversation_participants.conversation_id", "conversation_participants.user_id"],
+            ondelete="RESTRICT",
+            name="fk_messages_sender_participant",
+        ),
+        UniqueConstraint("sender_id", "client_message_id", name="uq_messages_sender_client_id"),
+        Index("ix_messages_conversation_created", "conversation_id", "created_at", "id"),
+        CheckConstraint("type IN ('TEXT')", name="ck_messages_type"),
+        CheckConstraint("status IN ('SENT')", name="ck_messages_status"),
+    )

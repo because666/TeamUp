@@ -14,6 +14,8 @@ from .errors import ServiceError, error_response
 from .schemas import (
     BlockData,
     BlockRequest,
+    ConversationCreateRequest,
+    ConversationData,
     Envelope,
     HealthData,
     InvitationAcceptData,
@@ -24,6 +26,8 @@ from .schemas import (
     MatchPreferencesData,
     MatchPreferencesPayload,
     MatchPreferencesUpdate,
+    MessageData,
+    MessageSendRequest,
     ProfileData,
     ProfilePayload,
     ProfileUpdate,
@@ -76,6 +80,7 @@ def make_app(
             {"name": "matching"},
             {"name": "projects"},
             {"name": "team"},
+            {"name": "messages"},
             {"name": "safety"},
         ],
     )
@@ -198,6 +203,67 @@ def make_app(
     ):
         invitation = app_store.reject_invitation(user_id, invitation_id)
         return envelope(request, invitation.model_dump(mode="json"))
+
+    @api.post("/conversations", tags=["messages"], response_model=Envelope[ConversationData])
+    def create_conversation(
+        payload: ConversationCreateRequest,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ):
+        conversation = app_store.create_conversation(user_id, payload.projectId, payload.otherUserId)
+        return envelope(request, conversation.model_dump(mode="json"))
+
+    @api.get("/conversations", tags=["messages"], response_model=Envelope[list[ConversationData]])
+    def list_conversations(
+        request: Request,
+        user_id: str = Depends(current_user),
+        limit: int = Query(default=20, ge=1, le=50),
+        cursor: str | None = Query(default=None, max_length=512),
+    ):
+        conversations, next_cursor = app_store.list_conversations(user_id, limit, cursor)
+        return envelope(
+            request,
+            [conversation.model_dump(mode="json") for conversation in conversations],
+            {"nextCursor": next_cursor, "hasMore": next_cursor is not None},
+        )
+
+    @api.get(
+        "/conversations/{conversation_id}/messages",
+        tags=["messages"],
+        response_model=Envelope[list[MessageData]],
+    )
+    def list_messages(
+        conversation_id: str,
+        request: Request,
+        user_id: str = Depends(current_user),
+        limit: int = Query(default=20, ge=1, le=50),
+        cursor: str | None = Query(default=None, max_length=512),
+    ):
+        messages, next_cursor = app_store.list_messages(user_id, conversation_id, limit, cursor)
+        return envelope(
+            request,
+            [message.model_dump(mode="json") for message in messages],
+            {"nextCursor": next_cursor, "hasMore": next_cursor is not None},
+        )
+
+    @api.post(
+        "/conversations/{conversation_id}/messages",
+        tags=["messages"],
+        response_model=Envelope[MessageData],
+    )
+    def send_message(
+        conversation_id: str,
+        payload: MessageSendRequest,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ):
+        message = app_store.send_message(
+            user_id,
+            conversation_id,
+            payload.clientMessageId,
+            payload.content,
+        )
+        return envelope(request, message.model_dump(mode="json"))
 
     @api.get("/me/profile", tags=["profile"], response_model=Envelope[ProfileData | None])
     def get_profile(request: Request, user_id: str = Depends(current_user)):

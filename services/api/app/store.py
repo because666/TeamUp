@@ -1,3 +1,4 @@
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from secrets import token_urlsafe
@@ -8,8 +9,10 @@ from uuid import uuid4
 from .errors import ServiceError
 from .schemas import (
     BlockData,
+    ConversationData,
     InvitationAcceptData,
     InvitationData,
+    MessageData,
     MatchPreferencesData,
     MatchPreferencesPayload,
     ProfileData,
@@ -39,6 +42,18 @@ class Store(Protocol):
     ) -> InvitationData: ...
     def accept_invitation(self, invitee_id: str, invitation_id: str) -> InvitationAcceptData: ...
     def reject_invitation(self, invitee_id: str, invitation_id: str) -> InvitationData: ...
+    def create_conversation(
+        self, requester_id: str, project_id: str, other_user_id: str
+    ) -> ConversationData: ...
+    def list_conversations(
+        self, requester_id: str, limit: int, cursor: str | None
+    ) -> tuple[list[ConversationData], str | None]: ...
+    def list_messages(
+        self, requester_id: str, conversation_id: str, limit: int, cursor: str | None
+    ) -> tuple[list[MessageData], str | None]: ...
+    def send_message(
+        self, requester_id: str, conversation_id: str, client_message_id: str, content: str
+    ) -> MessageData: ...
     def get_profile(self, user_id: str) -> ProfileData | None: ...
     def save_profile(self, user_id: str, payload: ProfilePayload, version: int | None) -> ProfileData: ...
     def get_match_preferences(self, user_id: str) -> MatchPreferencesData | None: ...
@@ -65,6 +80,8 @@ class MemoryStore:
         self.sessions: dict[str, tuple[str, datetime]] = {}
         self.blocks: dict[tuple[str, str], BlockData] = {}
         self.invitations: dict[str, InvitationData] = {}
+        self.conversations: dict[str, ConversationData] = {}
+        self.messages: dict[str, MessageData] = {}
         self.profiles: dict[str, ProfileData] = {}
         self.match_preferences: dict[str, MatchPreferencesData] = {}
         self.projects: dict[str, ProjectData] = {}
@@ -203,6 +220,127 @@ class MemoryStore:
             rejected = invitation.model_copy(update={"status": "REJECTED", "respondedAt": now_utc()})
             self.invitations[invitation_id] = rejected
             return deepcopy(rejected)
+
+    def create_conversation(
+        self, requester_id: str, project_id: str, other_user_id: str
+    ) -> ConversationData:
+        with self._lock:
+            if requester_id == other_user_id:
+                raise ServiceError("CANNOT_MESSAGE_SELF", "不能与自己创建会话。", 422)
+            project = self.projects.get(project_id)
+            if project is None or project.status != "PUBLISHED":
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可联系。", 404)
+            if other_user_id not in self.users_by_subject.values():
+                raise ServiceError("RESOURCE_NOT_FOUND", "用户不存在或不可联系。", 404)
+            active_member_ids = {
+                member.userId
+                for member in self.project_members.values()
+                if member.projectId == project_id and member.status == "ACTIVE"
+            }
+            if not ({requester_id, other_user_id} & ({project.ownerId} | active_member_ids)):
+                raise ServiceError("FORBIDDEN", "当前用户关系不能基于该项目创建会话。", 403)
+            if self.users_blocked(requester_id, other_user_id):
+                raise ServiceError("USER_BLOCKED", "当前用户关系不允许创建会话。", 409)
+            participants = sorted((requester_id, other_user_id))
+            existing = next(
+                (
+                    item
+                    for item in self.conversations.values()
+                    if item.projectId == project_id and item.participantUserIds == participants
+                ),
+                None,
+            )
+            if existing is not None:
+                return deepcopy(existing)
+            timestamp = now_utc()
+            conversation = ConversationData(
+                id=f"con_{uuid4().hex}",
+                projectId=project_id,
+                participantUserIds=participants,
+                lastMessageAt=None,
+                createdAt=timestamp,
+            )
+            self.conversations[conversation.id] = conversation
+            return deepcopy(conversation)
+
+    def list_conversations(
+        self, requester_id: str, limit: int, cursor: str | None
+    ) -> tuple[list[ConversationData], str | None]:
+        with self._lock:
+            conversations = sorted(
+                (item for item in self.conversations.values() if requester_id in item.participantUserIds),
+                key=lambda item: (item.lastMessageAt or item.createdAt, item.id),
+                reverse=True,
+            )
+            if cursor:
+                cursor_time, cursor_id = self._decode_cursor(cursor)
+                conversations = [
+                    item
+                    for item in conversations
+                    if (item.lastMessageAt or item.createdAt, item.id) < (cursor_time, cursor_id)
+                ]
+            page = conversations[:limit]
+            has_more = len(conversations) > limit
+            return deepcopy(page), (
+                self._encode_cursor(page[-1].lastMessageAt or page[-1].createdAt, page[-1].id)
+                if has_more and page
+                else None
+            )
+
+    def list_messages(
+        self, requester_id: str, conversation_id: str, limit: int, cursor: str | None
+    ) -> tuple[list[MessageData], str | None]:
+        with self._lock:
+            self._require_conversation_participant(conversation_id, requester_id)
+            messages = sorted(
+                (item for item in self.messages.values() if item.conversationId == conversation_id),
+                key=lambda item: (item.createdAt, item.id),
+            )
+            if cursor:
+                cursor_time, cursor_id = self._decode_cursor(cursor)
+                messages = [
+                    item for item in messages if (item.createdAt, item.id) > (cursor_time, cursor_id)
+                ]
+            page = messages[:limit]
+            has_more = len(messages) > limit
+            return deepcopy(page), (
+                self._encode_cursor(page[-1].createdAt, page[-1].id) if has_more and page else None
+            )
+
+    def send_message(
+        self, requester_id: str, conversation_id: str, client_message_id: str, content: str
+    ) -> MessageData:
+        with self._lock:
+            conversation = self._require_conversation_participant(conversation_id, requester_id)
+            other_user_id = next(item for item in conversation.participantUserIds if item != requester_id)
+            existing = next(
+                (
+                    item
+                    for item in self.messages.values()
+                    if item.senderUserId == requester_id and item.clientMessageId == client_message_id
+                ),
+                None,
+            )
+            if existing is not None:
+                if existing.conversationId != conversation_id or existing.content != content:
+                    raise ServiceError(
+                        "MESSAGE_IDEMPOTENCY_CONFLICT", "消息幂等键已用于不同内容。", 409
+                    )
+                return deepcopy(existing)
+            if self.users_blocked(requester_id, other_user_id):
+                raise ServiceError("USER_BLOCKED", "当前用户关系不允许发送消息。", 409)
+            timestamp = now_utc()
+            message = MessageData(
+                id=f"msg_{uuid4().hex}",
+                conversationId=conversation_id,
+                senderUserId=requester_id,
+                clientMessageId=client_message_id,
+                content=content,
+                createdAt=timestamp,
+            )
+            self.messages[message.id] = message
+            self.conversations[conversation_id] = conversation.model_copy(update={"lastMessageAt": timestamp})
+            return deepcopy(message)
 
     def get_profile(self, user_id: str) -> ProfileData | None:
         with self._lock:
@@ -444,6 +582,32 @@ class MemoryStore:
         if invitation is None or invitation.inviteeUserId != invitee_id:
             raise ServiceError("RESOURCE_NOT_FOUND", "邀请不存在或不可见。", 404)
         return invitation
+
+    def _require_conversation_participant(
+        self, conversation_id: str, requester_id: str
+    ) -> ConversationData:
+        conversation = self.conversations.get(conversation_id)
+        if conversation is None or requester_id not in conversation.participantUserIds:
+            raise ServiceError("RESOURCE_NOT_FOUND", "会话不存在或不可见。", 404)
+        return conversation
+
+    @staticmethod
+    def _encode_cursor(sort_time: datetime, item_id: str) -> str:
+        raw = f"{sort_time.isoformat()}|{item_id}"
+        return urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _decode_cursor(cursor: str) -> tuple[datetime, str]:
+        try:
+            padding = "=" * (-len(cursor) % 4)
+            raw = urlsafe_b64decode(cursor + padding).decode("utf-8")
+            sort_time, item_id = raw.split("|", 1)
+            parsed = datetime.fromisoformat(sort_time)
+            if parsed.tzinfo is None or not item_id:
+                raise ValueError
+            return parsed, item_id
+        except (ValueError, UnicodeDecodeError):
+            raise ServiceError("VALIDATION_ERROR", "分页游标无效。", 422) from None
 
     @staticmethod
     def _role_data(role: RolePayload, role_id: str, existing: RoleData | None = None) -> dict:

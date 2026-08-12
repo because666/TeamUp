@@ -8,7 +8,7 @@ python -m alembic current
 python -m alembic downgrade base
 ```
 
-The initial migration creates identity/session, profile, project, role, and ordered tag tables. Revision `20260812_0002` adds match preferences and structured role constraints. Revision `20260812_0003` adds project members, composite project/role integrity, uniqueness, and capacity-query indexes. Revision `20260812_0004` adds directional user blocks, a self-block check, and the reverse lookup index. Revision `20260812_0005` adds project role invitations, pending uniqueness, state checks, and invitee/project query indexes. These migrations do not import local memory data. Always verify downgrade against non-production data before relying on it as a recovery path.
+The initial migration creates identity/session, profile, project, role, and ordered tag tables. Revision `20260812_0002` adds match preferences and structured role constraints. Revision `20260812_0003` adds project members, composite project/role integrity, uniqueness, and capacity-query indexes. Revision `20260812_0004` adds directional user blocks, a self-block check, and the reverse lookup index. Revision `20260812_0005` adds project role invitations, pending uniqueness, state checks, and invitee/project query indexes. Revision `20260812_0006` adds two-party project conversations, participants, text messages, sender participation integrity, idempotency uniqueness, and pagination indexes. These migrations do not import local memory data. Always verify downgrade against non-production data before relying on it as a recovery path.
 
 To run the MySQL-specific integration test after upgrading an isolated test database:
 

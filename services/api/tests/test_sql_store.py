@@ -376,3 +376,72 @@ def test_invitations_persist_accept_reject_expire_and_enforce_permissions(sql_st
         "PROJECT_NOT_MATCHABLE",
         lambda: recreated.accept_invitation(second_id, closing.id),
     )
+
+
+def test_conversations_messages_persist_page_and_enforce_privacy(sql_store) -> None:
+    store, factory, engine = sql_store
+    owner_id, _, _ = store.login("wechat:app-a:conversation-owner")
+    other_id, _, _ = store.login("wechat:app-a:conversation-other")
+    outsider_id, _, _ = store.login("wechat:app-a:conversation-outsider")
+    unrelated_id, _, _ = store.login("wechat:app-a:conversation-unrelated")
+    draft = store.create_project(owner_id, project_payload("会话项目"))
+    published = store.publish_project(owner_id, draft.id, draft.version)
+
+    conversation = store.create_conversation(other_id, published.id, owner_id)
+    assert store.create_conversation(owner_id, published.id, other_id) == conversation
+    assert_service_error(
+        "FORBIDDEN",
+        lambda: store.create_conversation(outsider_id, published.id, unrelated_id),
+    )
+    assert_service_error(
+        "RESOURCE_NOT_FOUND",
+        lambda: store.list_messages(outsider_id, conversation.id, 20, None),
+    )
+
+    first = store.send_message(other_id, conversation.id, "device-001", "第一条")
+    second = store.send_message(owner_id, conversation.id, "device-001", "第二条")
+    third = store.send_message(other_id, conversation.id, "device-002", "第三条")
+    assert store.send_message(other_id, conversation.id, "device-001", "第一条") == first
+    assert_service_error(
+        "MESSAGE_IDEMPOTENCY_CONFLICT",
+        lambda: store.send_message(other_id, conversation.id, "device-001", "不同正文"),
+    )
+    first_page, cursor = store.list_messages(owner_id, conversation.id, 2, None)
+    second_page, next_cursor = store.list_messages(owner_id, conversation.id, 2, cursor)
+    expected_messages = sorted([first, second, third], key=lambda item: (item.createdAt, item.id))
+    assert first_page == expected_messages[:2]
+    assert second_page == expected_messages[2:]
+    assert cursor is not None
+    assert next_cursor is None
+
+    recreated = SqlAlchemyStore(factory, engine)
+    conversations, conversation_cursor = recreated.list_conversations(other_id, 20, None)
+    assert conversations[0].id == conversation.id
+    assert conversations[0].lastMessageAt == third.createdAt
+    assert conversation_cursor is None
+    assert recreated.list_messages(other_id, conversation.id, 20, None)[0] == expected_messages
+
+    additional_conversations = []
+    for index in range(2):
+        extra_project = recreated.create_project(owner_id, project_payload(f"分页会话项目 {index}"))
+        extra_project = recreated.publish_project(owner_id, extra_project.id, extra_project.version)
+        additional_conversations.append(
+            recreated.create_conversation(owner_id, extra_project.id, other_id)
+        )
+    conversation_page, conversation_cursor = recreated.list_conversations(owner_id, 2, None)
+    remaining_page, final_cursor = recreated.list_conversations(owner_id, 2, conversation_cursor)
+    assert len(conversation_page) == 2
+    assert len(remaining_page) == 1
+    assert {item.id for item in conversation_page + remaining_page} == {
+        conversation.id,
+        *(item.id for item in additional_conversations),
+    }
+    assert conversation_cursor is not None
+    assert final_cursor is None
+
+    recreated.create_block(other_id, owner_id)
+    assert_service_error(
+        "USER_BLOCKED",
+        lambda: recreated.send_message(owner_id, conversation.id, "blocked-001", "不能发送"),
+    )
+    assert recreated.list_messages(owner_id, conversation.id, 20, None)[0] == expected_messages

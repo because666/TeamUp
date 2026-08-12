@@ -377,3 +377,61 @@ def test_invitation_reject_expiry_block_and_capacity_boundaries() -> None:
 
     store.add_project_member(published["id"], role_id, invitee_id)
     assert client.post("/api/v1/invitations", headers=owner_headers, json=second_payload).status_code == 409
+
+
+def test_conversation_message_flow_permissions_idempotency_and_blocking() -> None:
+    store = MemoryStore()
+    client = TestClient(make_app(Settings(environment="test", allow_local_login=True), store_override=store))
+    owner_token = login(client, "message-owner")
+    other_token = login(client, "message-other")
+    outsider_token = login(client, "message-outsider")
+    owner_id = store.user_for_token(owner_token)
+    other_id = store.user_for_token(other_token)
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    other_headers = {"Authorization": f"Bearer {other_token}"}
+    outsider_headers = {"Authorization": f"Bearer {outsider_token}"}
+    draft = client.post("/api/v1/projects", headers=owner_headers, json=project_payload()).json()["data"]
+    published = client.post(
+        f"/api/v1/projects/{draft['id']}/publish",
+        headers=owner_headers,
+        json={"version": draft["version"]},
+    ).json()["data"]
+    payload = {"projectId": published["id"], "otherUserId": owner_id}
+
+    assert client.post("/api/v1/conversations", json=payload).status_code == 401
+    created = client.post("/api/v1/conversations", headers=other_headers, json=payload)
+    assert created.status_code == 200
+    conversation = created.json()["data"]
+    assert conversation["participantUserIds"] == sorted([owner_id, other_id])
+    assert client.post("/api/v1/conversations", headers=owner_headers, json={"projectId": published["id"], "otherUserId": other_id}).json()["data"] == conversation
+    assert client.post("/api/v1/conversations", headers=owner_headers, json={"projectId": published["id"], "otherUserId": owner_id}).status_code == 422
+
+    message_path = f"/api/v1/conversations/{conversation['id']}/messages"
+    message_payload = {"clientMessageId": "mobile-001", "content": "  你好，想了解项目  "}
+    assert client.post(message_path, json=message_payload).status_code == 401
+    assert client.post(message_path, headers=outsider_headers, json=message_payload).status_code == 404
+    sent = client.post(message_path, headers=other_headers, json=message_payload)
+    assert sent.status_code == 200
+    message = sent.json()["data"]
+    assert message["content"] == "你好，想了解项目"
+    assert client.post(message_path, headers=other_headers, json={**message_payload, "content": "你好，想了解项目"}).json()["data"] == message
+    conflict = client.post(message_path, headers=other_headers, json={**message_payload, "content": "不同内容"})
+    assert conflict.status_code == 409
+    assert conflict.json()["error"]["code"] == "MESSAGE_IDEMPOTENCY_CONFLICT"
+    assert client.post(message_path, headers=other_headers, json={"clientMessageId": "blank", "content": "   "}).status_code == 422
+    assert client.post(message_path, headers=other_headers, json={"clientMessageId": "long", "content": "中" * 1001}).status_code == 422
+
+    store.create_block(owner_id, other_id)
+    assert client.post(message_path, headers=owner_headers, json={"clientMessageId": "blocked", "content": "新消息"}).status_code == 409
+    history = client.get(message_path, headers=owner_headers)
+    assert history.status_code == 200
+    assert history.json()["data"] == [message]
+    assert client.get(message_path, headers=outsider_headers).status_code == 404
+    assert client.get(message_path, headers=owner_headers, params={"cursor": "invalid"}).status_code == 422
+    assert client.get("/api/v1/conversations", headers=owner_headers).json()["data"][0]["id"] == conversation["id"]
+    assert client.get("/api/v1/conversations", headers=owner_headers, params={"cursor": "invalid"}).status_code == 422
+
+    schema = client.app.openapi()
+    assert "post" in schema["paths"]["/api/v1/conversations"]
+    assert "get" in schema["paths"]["/api/v1/conversations"]
+    assert {"get", "post"}.issubset(schema["paths"]["/api/v1/conversations/{conversation_id}/messages"])

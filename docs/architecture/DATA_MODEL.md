@@ -7,7 +7,7 @@
 
 ## 基础实现状态
 
-首个 FastAPI 切片保留 local/test 内存适配器，并按 [ADR-0004](../decisions/ADR-0004-mysql-data-access.md) 实现了 MySQL 8 持久化适配器。匹配偏好、项目成员、用户拉黑和岗位邀请分别通过第二至第五版堆叠迁移实现。合入 `main` 仍需角色 A 评审。
+首个 FastAPI 切片保留 local/test 内存适配器，并按 [ADR-0004](../decisions/ADR-0004-mysql-data-access.md) 实现了 MySQL 8 持久化适配器。匹配偏好、项目成员、用户拉黑、岗位邀请及会话消息分别通过第二至第六版堆叠迁移实现。合入 `main` 仍需角色 A 评审。
 
 首批已实现物理表：
 
@@ -29,6 +29,9 @@
 | `project_members` | 项目有效成员 | 项目/用户唯一、项目/岗位复合外键、状态检查和容量索引 |
 | `blocks` | 用户单向拉黑关系 | `(blocker_id, blocked_id)` 主键、禁止自己拉黑和反向查询索引 |
 | `invitations` | 项目岗位邀请与状态机 | 项目/岗位复合外键、待处理唯一键、用户外键、状态/自邀检查和查询索引 |
+| `conversations` | 双人项目会话 | 项目外键、项目/参与者排序组合唯一键、最近消息时间索引 |
+| `conversation_participants` | 会话有效参与者 | `(conversation_id, user_id)` 主键、用户/状态查询索引 |
+| `messages` | 纯文本站内消息 | 发送者/参与者复合外键、sender/client ID 唯一、稳定分页索引和状态检查 |
 
 数据库时间以 UTC 秒精度写入，API 输出恢复为带 UTC 时区的时间。原始平台 token、微信 `session_key`、AppSecret 和数据库连接串不得进入业务表。
 
@@ -148,6 +151,14 @@ RecommendationImpression 1--N RecommendationOutcome
 只有 `PENDING` 可首次接受或拒绝；重复接受 `ACCEPTED` 和重复拒绝 `REJECTED` 返回原确定结果。接受时必须原子创建成员关系并更新邀请状态，成员容量由有效成员计数导出。
 
 第五版实现使用 `pending_key = project_id:role_id:invitee_id` 保证同一组合最多一条 `PENDING` 邀请；进入终态时清空该键，允许后续重新邀请。`expires_at`、`created_at` 和 `responded_at` 使用 UTC；首版有效期为 7 天，该时长仍需角色 A 评审。过期邀请在读取/处理时判定，当前不依赖定时任务。
+
+### Conversation / Message
+
+- 第六版 `conversation_key = project_id:sorted_user_a:sorted_user_b`，保证同一项目与同一对用户只有一个会话；
+- 每个首版会话恰有两个 `ACTIVE` 参与者；数据库通过 `(conversation_id, sender_id)` 复合外键保证消息发送者属于该会话；
+- `(sender_id, client_message_id)` 唯一，发送操作在会话行锁内处理同 key 重试和正文冲突；
+- `messages(conversation_id, created_at, id)` 支持稳定正序分页，`conversation_participants(user_id, status, conversation_id)` 支持私有会话列表；
+- 消息正文属于 Sensitive，不进入日志、推荐特征或训练事件；长度与纯文本校验由服务/API 层执行，数据库保留类型、状态、参与关系和唯一性约束。
 
 ### User
 

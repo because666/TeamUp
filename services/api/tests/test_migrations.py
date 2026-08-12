@@ -23,6 +23,9 @@ EXPECTED_TABLES = {
     "project_members",
     "blocks",
     "invitations",
+    "conversations",
+    "conversation_participants",
+    "messages",
 }
 
 
@@ -56,6 +59,13 @@ def test_initial_migration_upgrades_and_downgrades(tmp_path: Path, monkeypatch) 
             and foreign_key["referred_table"] == "project_roles"
             and foreign_key["referred_columns"] == ["project_id", "id"]
             for foreign_key in invitation_foreign_keys
+        )
+        message_foreign_keys = inspect(engine).get_foreign_keys("messages")
+        assert any(
+            foreign_key["constrained_columns"] == ["conversation_id", "sender_id"]
+            and foreign_key["referred_table"] == "conversation_participants"
+            and foreign_key["referred_columns"] == ["conversation_id", "user_id"]
+            for foreign_key in message_foreign_keys
         )
         command.check(config)
         command.downgrade(config, "base")

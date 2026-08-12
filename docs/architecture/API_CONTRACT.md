@@ -86,6 +86,7 @@ FastAPI 基础实现目前已覆盖 `/api/v1` 下的健康检查、微信真实/
 ## 5. 幂等与并发
 
 - 创建邀请和接受邀请当前使用领域唯一键与状态机提供重复保护；通用 `Idempotency-Key` 持久化仍为 `Proposed`，后续消息等不能据此假定已实现。
+- 发送消息使用请求体 `clientMessageId` 作为 sender 范围的领域幂等键；同 key 同正文返回原消息，不同正文返回 `409 MESSAGE_IDEMPOTENCY_CONFLICT`。
 - 更新资源使用 `version` 或等效乐观锁；版本冲突返回 `409 CONFLICT`。
 - 接受邀请由服务端事务再次检查项目状态、岗位容量、过期时间和成员唯一性。
 
@@ -126,6 +127,85 @@ FastAPI 基础实现目前已覆盖 `/api/v1` 下的健康检查、微信真实/
 | API-SAFE-03 | DELETE | `/blocks/{blockedUserId}` | 取消拉黑 | SAFE-001 |
 
 ## 7. 关键 DTO 最小字段
+
+### 双人会话与文本消息（Proposed，任务分支已实现）
+
+`API-CONV-01`：
+
+```http
+POST /api/v1/conversations
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"projectId":"prj_opaque_id","otherUserId":"usr_opaque_id"}
+```
+
+成功 `data`：
+
+```json
+{
+  "id": "con_opaque_id",
+  "projectId": "prj_opaque_id",
+  "participantUserIds": ["usr_a", "usr_b"],
+  "lastMessageAt": null,
+  "createdAt": "2026-08-12T10:00:00Z"
+}
+```
+
+- 项目必须为 `PUBLISHED`，other user 必须是另一名有效用户；
+- 两名参与者中至少一人必须是项目 owner 或 `ACTIVE` 成员，支持 owner 联系人才和候选人联系项目方；
+- 同一项目与同一对用户重复创建返回原会话，不产生第二条记录；
+- 任一方向拉黑返回 `409 USER_BLOCKED`；自己建会话返回 `422 CANNOT_MESSAGE_SELF`；
+- 无效/不可联系项目或用户返回 `404 RESOURCE_NOT_FOUND`，与项目无关的两名用户返回 `403 FORBIDDEN`。
+
+`API-CONV-02`：
+
+```http
+GET /api/v1/conversations?limit=20&cursor=<opaque>
+Authorization: Bearer <token>
+```
+
+只返回当前用户作为 `ACTIVE` 参与者的会话摘要，不包含消息正文。按 `lastMessageAt ?? createdAt`、`id` 倒序；`limit` 默认 20、最大 50。响应 `meta` 为 `nextCursor` 和 `hasMore`。
+
+`API-MSG-01`：
+
+```http
+GET /api/v1/conversations/{conversationId}/messages?limit=20&cursor=<opaque>
+Authorization: Bearer <token>
+```
+
+只允许参与者读取；其他用户与不存在会话统一返回 `404 RESOURCE_NOT_FOUND`。消息按 `(createdAt, id)` 正序稳定分页，`limit` 默认 20、最大 50。拉黑不删除或隐藏双方作为原参与者可读取的历史消息。
+
+`API-MSG-02`：
+
+```http
+POST /api/v1/conversations/{conversationId}/messages
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"clientMessageId":"mobile-20260812-001","content":"你好，想了解项目"}
+```
+
+成功 `data`：
+
+```json
+{
+  "id": "msg_opaque_id",
+  "conversationId": "con_opaque_id",
+  "senderUserId": "usr_sender",
+  "clientMessageId": "mobile-20260812-001",
+  "type": "TEXT",
+  "content": "你好，想了解项目",
+  "status": "SENT",
+  "createdAt": "2026-08-12T10:05:00Z"
+}
+```
+
+- `clientMessageId` 长度 1..64，只允许字母、数字、点、下划线、冒号和连字符；同一 sender 全局唯一；
+- `content` 去除首尾空白后长度为 1..1000，仅作为纯文本保存；
+- 同 sender、同 key、同会话且同正文的重试返回原消息；key 已用于其他会话或正文时返回 `409 MESSAGE_IDEMPOTENCY_CONFLICT`；
+- 已成功消息的相同重试优先返回原结果；任一方向拉黑只阻止真正的新消息并返回 `409 USER_BLOCKED`；
+- 服务端不记录消息正文到应用日志；已读、撤回、附件、推送和实时 WebSocket 不在当前接口范围。
 
 ### 匹配输入扩展（Proposed，任务分支已实现）
 
@@ -328,7 +408,7 @@ Authorization: Bearer <token>
 
 响应为 `{"blockedUserId":"usr_opaque_id","removed":true}`；关系不存在时仍返回 `200` 和 `removed=false`。取消拉黑只删除当前用户创建的单向关系，不删除对方创建的关系，也不恢复历史邀请、消息或成员关系。
 
-服务端内部双向检查只要存在 `(A,B)` 或 `(B,A)` 任一关系就视为已阻断。当前堆叠分支已将该检查接入新成员创建以及邀请创建/接受；消息、发现和匹配模块实现时必须复用同一检查，不能根据客户端状态判断。
+服务端内部双向检查只要存在 `(A,B)` 或 `(B,A)` 任一关系就视为已阻断。当前堆叠分支已将该检查接入新成员创建、邀请创建/接受以及新会话/新消息；发现和匹配模块实现时必须复用同一检查，不能根据客户端状态判断。
 
 ### ProjectSummary
 

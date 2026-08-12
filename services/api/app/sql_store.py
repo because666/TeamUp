@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from secrets import token_urlsafe
@@ -11,10 +12,13 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from .db_models import (
     BlockRow,
+    ConversationParticipantRow,
+    ConversationRow,
     InvitationRow,
     MatchPreferenceAvailabilitySlotRow,
     MatchPreferenceDirectionRow,
     MatchPreferenceRow,
+    MessageRow,
     ProfileRow,
     ProfileScenarioRow,
     ProfileSkillRow,
@@ -30,8 +34,10 @@ from .db_models import (
 from .errors import ServiceError
 from .schemas import (
     BlockData,
+    ConversationData,
     InvitationAcceptData,
     InvitationData,
+    MessageData,
     MatchPreferencesData,
     MatchPreferencesPayload,
     ProfileData,
@@ -326,6 +332,182 @@ class SqlAlchemyStore:
             session.flush()
             return self._invitation_data(invitation)
 
+    def create_conversation(
+        self, requester_id: str, project_id: str, other_user_id: str
+    ) -> ConversationData:
+        if requester_id == other_user_id:
+            raise ServiceError("CANNOT_MESSAGE_SELF", "不能与自己创建会话。", 422)
+        with self._session_factory.begin() as session:
+            project = session.scalar(select(ProjectRow).where(ProjectRow.id == project_id).with_for_update())
+            if project is None or project.status != "PUBLISHED":
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可联系。", 404)
+            participant_ids = sorted((requester_id, other_user_id))
+            users = list(
+                session.scalars(
+                    select(UserRow)
+                    .where(UserRow.id.in_(participant_ids), UserRow.status == "ACTIVE")
+                    .order_by(UserRow.id)
+                    .with_for_update()
+                )
+            )
+            if len(users) != 2:
+                raise ServiceError("RESOURCE_NOT_FOUND", "用户不存在或不可联系。", 404)
+            related_user_ids = {project.owner_id}
+            related_user_ids.update(
+                session.scalars(
+                    select(ProjectMemberRow.user_id).where(
+                        ProjectMemberRow.project_id == project_id,
+                        ProjectMemberRow.user_id.in_(participant_ids),
+                        ProjectMemberRow.status == "ACTIVE",
+                    )
+                )
+            )
+            if not (set(participant_ids) & related_user_ids):
+                raise ServiceError("FORBIDDEN", "当前用户关系不能基于该项目创建会话。", 403)
+            if self._users_blocked(session, requester_id, other_user_id):
+                raise ServiceError("USER_BLOCKED", "当前用户关系不允许创建会话。", 409)
+            conversation_key = self._conversation_key(project_id, participant_ids)
+            existing = session.scalar(
+                select(ConversationRow)
+                .where(ConversationRow.conversation_key == conversation_key)
+                .with_for_update()
+            )
+            if existing is not None:
+                return self._conversation_data(session, existing)
+            timestamp = db_now()
+            row = ConversationRow(
+                id=f"con_{uuid4().hex}",
+                project_id=project_id,
+                conversation_key=conversation_key,
+                last_message_at=None,
+                created_at=timestamp,
+            )
+            session.add(row)
+            session.flush()
+            session.add_all(
+                [
+                    ConversationParticipantRow(
+                        conversation_id=row.id,
+                        user_id=user_id,
+                        status="ACTIVE",
+                        joined_at=timestamp,
+                    )
+                    for user_id in participant_ids
+                ]
+            )
+            session.flush()
+            return self._conversation_data(session, row)
+
+    def list_conversations(
+        self, requester_id: str, limit: int, cursor: str | None
+    ) -> tuple[list[ConversationData], str | None]:
+        with self._session_factory() as session:
+            sort_time = func.coalesce(ConversationRow.last_message_at, ConversationRow.created_at)
+            query = (
+                select(ConversationRow)
+                .join(
+                    ConversationParticipantRow,
+                    ConversationParticipantRow.conversation_id == ConversationRow.id,
+                )
+                .where(
+                    ConversationParticipantRow.user_id == requester_id,
+                    ConversationParticipantRow.status == "ACTIVE",
+                )
+            )
+            if cursor:
+                cursor_time, cursor_id = self._decode_cursor(cursor)
+                query = query.where(
+                    or_(sort_time < cursor_time, (sort_time == cursor_time) & (ConversationRow.id < cursor_id))
+                )
+            rows = list(session.scalars(query.order_by(sort_time.desc(), ConversationRow.id.desc()).limit(limit + 1)))
+            has_more = len(rows) > limit
+            page = rows[:limit]
+            data = [self._conversation_data(session, row) for row in page]
+            next_cursor = (
+                self._encode_cursor(page[-1].last_message_at or page[-1].created_at, page[-1].id)
+                if has_more and page
+                else None
+            )
+            return data, next_cursor
+
+    def list_messages(
+        self, requester_id: str, conversation_id: str, limit: int, cursor: str | None
+    ) -> tuple[list[MessageData], str | None]:
+        with self._session_factory() as session:
+            self._require_conversation_participant(session, conversation_id, requester_id)
+            query = select(MessageRow).where(MessageRow.conversation_id == conversation_id)
+            if cursor:
+                cursor_time, cursor_id = self._decode_cursor(cursor)
+                query = query.where(
+                    or_(
+                        MessageRow.created_at > cursor_time,
+                        (MessageRow.created_at == cursor_time) & (MessageRow.id > cursor_id),
+                    )
+                )
+            rows = list(session.scalars(query.order_by(MessageRow.created_at, MessageRow.id).limit(limit + 1)))
+            has_more = len(rows) > limit
+            page = rows[:limit]
+            return [self._message_data(row) for row in page], (
+                self._encode_cursor(page[-1].created_at, page[-1].id) if has_more and page else None
+            )
+
+    def send_message(
+        self, requester_id: str, conversation_id: str, client_message_id: str, content: str
+    ) -> MessageData:
+        with self._session_factory.begin() as session:
+            conversation = session.scalar(
+                select(ConversationRow).where(ConversationRow.id == conversation_id).with_for_update()
+            )
+            if conversation is None:
+                raise ServiceError("RESOURCE_NOT_FOUND", "会话不存在或不可见。", 404)
+            participant_ids = list(
+                session.scalars(
+                    select(ConversationParticipantRow.user_id)
+                    .where(
+                        ConversationParticipantRow.conversation_id == conversation_id,
+                        ConversationParticipantRow.status == "ACTIVE",
+                    )
+                    .order_by(ConversationParticipantRow.user_id)
+                )
+            )
+            if requester_id not in participant_ids or len(participant_ids) != 2:
+                raise ServiceError("RESOURCE_NOT_FOUND", "会话不存在或不可见。", 404)
+            existing = session.scalar(
+                select(MessageRow).where(
+                    MessageRow.sender_id == requester_id,
+                    MessageRow.client_message_id == client_message_id,
+                )
+            )
+            if existing is not None:
+                if existing.conversation_id != conversation_id or existing.content != content:
+                    raise ServiceError(
+                        "MESSAGE_IDEMPOTENCY_CONFLICT", "消息幂等键已用于不同内容。", 409
+                    )
+                return self._message_data(existing)
+            other_user_id = next(item for item in participant_ids if item != requester_id)
+            if self._users_blocked(session, requester_id, other_user_id):
+                raise ServiceError("USER_BLOCKED", "当前用户关系不允许发送消息。", 409)
+            timestamp = db_now()
+            row = MessageRow(
+                id=f"msg_{uuid4().hex}",
+                conversation_id=conversation_id,
+                sender_id=requester_id,
+                client_message_id=client_message_id,
+                type="TEXT",
+                content=content,
+                status="SENT",
+                created_at=timestamp,
+            )
+            conversation.last_message_at = timestamp
+            session.add(row)
+            try:
+                session.flush()
+            except IntegrityError:
+                raise ServiceError(
+                    "MESSAGE_IDEMPOTENCY_CONFLICT", "消息幂等键已用于其他请求。", 409
+                ) from None
+            return self._message_data(row)
+
     def get_profile(self, user_id: str) -> ProfileData | None:
         with self._session_factory() as session:
             row = session.scalar(self._profile_query().where(ProfileRow.user_id == user_id))
@@ -589,6 +771,43 @@ class SqlAlchemyStore:
             )
             is not None
         )
+
+    @staticmethod
+    def _conversation_key(project_id: str, participant_ids: list[str]) -> str:
+        return f"{project_id}:{participant_ids[0]}:{participant_ids[1]}"
+
+    @staticmethod
+    def _encode_cursor(sort_time: datetime, item_id: str) -> str:
+        api_time = api_datetime(sort_time)
+        raw = f"{api_time.isoformat()}|{item_id}"
+        return urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _decode_cursor(cursor: str) -> tuple[datetime, str]:
+        try:
+            padding = "=" * (-len(cursor) % 4)
+            raw = urlsafe_b64decode(cursor + padding).decode("utf-8")
+            sort_time, item_id = raw.split("|", 1)
+            parsed = datetime.fromisoformat(sort_time)
+            if parsed.tzinfo is None or not item_id:
+                raise ValueError
+            return parsed.astimezone(UTC).replace(tzinfo=None), item_id
+        except (ValueError, UnicodeDecodeError):
+            raise ServiceError("VALIDATION_ERROR", "分页游标无效。", 422) from None
+
+    @staticmethod
+    def _require_conversation_participant(
+        session: Session, conversation_id: str, requester_id: str
+    ) -> None:
+        participant = session.scalar(
+            select(ConversationParticipantRow.user_id).where(
+                ConversationParticipantRow.conversation_id == conversation_id,
+                ConversationParticipantRow.user_id == requester_id,
+                ConversationParticipantRow.status == "ACTIVE",
+            )
+        )
+        if participant is None:
+            raise ServiceError("RESOURCE_NOT_FOUND", "会话不存在或不可见。", 404)
 
     @staticmethod
     def _active_member(session: Session, project_id: str, user_id: str) -> ProjectMemberRow | None:
@@ -862,6 +1081,43 @@ class SqlAlchemyStore:
                 "expiresAt": api_datetime(row.expires_at),
                 "createdAt": api_datetime(row.created_at),
                 "respondedAt": api_datetime(row.responded_at),
+            }
+        )
+
+    @staticmethod
+    def _conversation_data(session: Session, row: ConversationRow) -> ConversationData:
+        participant_ids = list(
+            session.scalars(
+                select(ConversationParticipantRow.user_id)
+                .where(
+                    ConversationParticipantRow.conversation_id == row.id,
+                    ConversationParticipantRow.status == "ACTIVE",
+                )
+                .order_by(ConversationParticipantRow.user_id)
+            )
+        )
+        return ConversationData.model_validate(
+            {
+                "id": row.id,
+                "projectId": row.project_id,
+                "participantUserIds": participant_ids,
+                "lastMessageAt": api_datetime(row.last_message_at),
+                "createdAt": api_datetime(row.created_at),
+            }
+        )
+
+    @staticmethod
+    def _message_data(row: MessageRow) -> MessageData:
+        return MessageData.model_validate(
+            {
+                "id": row.id,
+                "conversationId": row.conversation_id,
+                "senderUserId": row.sender_id,
+                "clientMessageId": row.client_message_id,
+                "type": row.type,
+                "content": row.content,
+                "status": row.status,
+                "createdAt": api_datetime(row.created_at),
             }
         )
 

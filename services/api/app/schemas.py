@@ -250,6 +250,40 @@ class InvitationAcceptData(BaseModel):
     member: ProjectMemberData
 
 
+class ConversationCreateRequest(BaseModel):
+    projectId: str = Field(min_length=1, max_length=64)
+    otherUserId: str = Field(min_length=1, max_length=64)
+
+
+class ConversationData(BaseModel):
+    id: str
+    projectId: str
+    participantUserIds: list[str] = Field(min_length=2, max_length=2)
+    lastMessageAt: datetime | None = None
+    createdAt: datetime
+
+
+class MessageSendRequest(BaseModel):
+    clientMessageId: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
+    content: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def strip_content(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
+
+
+class MessageData(BaseModel):
+    id: str
+    conversationId: str
+    senderUserId: str
+    clientMessageId: str
+    type: Literal["TEXT"] = "TEXT"
+    content: str
+    status: Literal["SENT"] = "SENT"
+    createdAt: datetime
+
+
 class ProjectPayload(BaseModel):
     title: str = Field(min_length=1, max_length=48)
     description: str = Field(min_length=1, max_length=600)

@@ -290,3 +290,59 @@ def test_mysql_invitations_persist_and_concurrent_accept_cannot_overfill() -> No
         assert captured.value.code == "USER_BLOCKED"
     finally:
         engine.dispose()
+
+
+def test_mysql_conversation_and_message_concurrency_is_idempotent() -> None:
+    assert MYSQL_URL is not None
+    engine = create_engine(MYSQL_URL, pool_pre_ping=True)
+    factory = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    store = SqlAlchemyStore(factory, engine)
+    suffix = uuid4().hex
+    owner_id, _, _ = store.login(f"wechat:integration:conversation-owner:{suffix}")
+    other_id, _, _ = store.login(f"wechat:integration:conversation-other:{suffix}")
+    try:
+        draft = store.create_project(owner_id, project_payload())
+        published = store.publish_project(owner_id, draft.id, draft.version)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            conversations = list(
+                executor.map(
+                    lambda args: store.create_conversation(*args),
+                    [
+                        (owner_id, published.id, other_id),
+                        (other_id, published.id, owner_id),
+                    ],
+                )
+            )
+        assert conversations[0] == conversations[1]
+        conversation_id = conversations[0].id
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            repeated = list(
+                executor.map(
+                    lambda _: store.send_message(
+                        other_id, conversation_id, f"same-{suffix}", "并发相同正文"
+                    ),
+                    range(2),
+                )
+            )
+        assert repeated[0] == repeated[1]
+        assert len(store.list_messages(owner_id, conversation_id, 20, None)[0]) == 1
+
+        def send_conflicting(content: str):
+            try:
+                return store.send_message(
+                    other_id, conversation_id, f"conflict-{suffix}", content
+                )
+            except ServiceError as error:
+                return error
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(send_conflicting, ["正文甲", "正文乙"]))
+        successes = [outcome for outcome in outcomes if not isinstance(outcome, ServiceError)]
+        failures = [outcome for outcome in outcomes if isinstance(outcome, ServiceError)]
+        assert len(successes) == 1
+        assert [error.code for error in failures] == ["MESSAGE_IDEMPOTENCY_CONFLICT"]
+        assert len(store.list_messages(owner_id, conversation_id, 20, None)[0]) == 2
+    finally:
+        engine.dispose()
