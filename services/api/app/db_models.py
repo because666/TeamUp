@@ -2,8 +2,18 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import DeclarativeBase, Mapped, foreign, mapped_column, relationship
 
 
 class Base(DeclarativeBase):
@@ -142,6 +152,11 @@ class ProjectRow(Base):
 
     roles: Mapped[list[ProjectRoleRow]] = relationship(cascade="all, delete-orphan", lazy="selectin")
     scenarios: Mapped[list[ProjectScenarioRow]] = relationship(cascade="all, delete-orphan", lazy="selectin")
+    members: Mapped[list[ProjectMemberRow]] = relationship(
+        primaryjoin=lambda: ProjectRow.id == foreign(ProjectMemberRow.project_id),
+        viewonly=True,
+        lazy="selectin",
+    )
     __table_args__ = (
         Index("ix_projects_status_published", "status", "published_at", "id"),
         CheckConstraint("status IN ('DRAFT','PUBLISHED','CLOSED')", name="ck_projects_status"),
@@ -168,6 +183,7 @@ class ProjectRoleRow(Base):
     )
     __table_args__ = (
         UniqueConstraint("project_id", "position", name="uq_project_roles_position"),
+        UniqueConstraint("project_id", "id", name="uq_project_roles_project_id_id"),
         CheckConstraint("headcount > 0", name="ck_project_roles_headcount"),
         CheckConstraint("hours_per_week BETWEEN 1 AND 40", name="ck_project_roles_hours_per_week"),
         CheckConstraint("status IN ('OPEN','CLOSED')", name="ck_project_roles_status"),
@@ -216,3 +232,27 @@ class ProjectScenarioRow(Base):
     scenario_code: Mapped[str] = mapped_column(String(64), nullable=False)
 
     __table_args__ = (UniqueConstraint("project_id", "scenario_code", name="uq_project_collaboration_scenario"),)
+
+
+class ProjectMemberRow(Base):
+    __tablename__ = "project_members"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    role_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="ACTIVE")
+    joined_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "role_id"],
+            ["project_roles.project_id", "project_roles.id"],
+            ondelete="RESTRICT",
+            name="fk_project_members_project_role",
+        ),
+        UniqueConstraint("project_id", "user_id", name="uq_project_members_project_user"),
+        Index("ix_project_members_role_status", "role_id", "status"),
+        Index("ix_project_members_user_status", "user_id", "status"),
+        CheckConstraint("status IN ('ACTIVE')", name="ck_project_members_status"),
+    )

@@ -227,3 +227,67 @@ def test_match_preferences_and_project_constraints_survive_recreation(sql_store)
         ProjectUpdate.model_validate({**changed_skills, "version": updated.version}),
     )
     assert removed.roles[0].requiredSkills == []
+
+
+def test_project_member_state_capacity_permissions_and_persistence(sql_store) -> None:
+    store, factory, engine = sql_store
+    owner_id, _, _ = store.login("wechat:app-a:member-owner")
+    first_user_id, _, _ = store.login("wechat:app-a:member-first")
+    second_user_id, _, _ = store.login("wechat:app-a:member-second")
+    outsider_id, _, _ = store.login("wechat:app-a:member-outsider")
+    draft = store.create_project(owner_id, project_payload("成员项目"))
+    role_id = draft.roles[0].id
+
+    second_project = store.create_project(owner_id, project_payload("另一个项目"))
+    second_project = store.publish_project(owner_id, second_project.id, second_project.version)
+    assert_service_error(
+        "RESOURCE_NOT_FOUND",
+        lambda: store.add_project_member(second_project.id, role_id, first_user_id),
+    )
+
+    assert_service_error("PROJECT_NOT_MATCHABLE", lambda: store.add_project_member(draft.id, role_id, first_user_id))
+    published = store.publish_project(owner_id, draft.id, draft.version)
+    member = store.add_project_member(published.id, role_id, first_user_id)
+
+    assert member.userId == first_user_id
+    assert store.list_project_members(owner_id, published.id) == [member]
+    assert store.list_project_members(first_user_id, published.id) == [member]
+    assert_service_error("FORBIDDEN", lambda: store.list_project_members(outsider_id, published.id))
+    assert_service_error(
+        "MEMBER_ALREADY_EXISTS",
+        lambda: store.add_project_member(published.id, role_id, first_user_id),
+    )
+    assert_service_error("ROLE_FULL", lambda: store.add_project_member(published.id, role_id, second_user_id))
+
+    recreated = SqlAlchemyStore(factory, engine)
+    assert recreated.list_project_members(owner_id, published.id) == [member]
+    refreshed = recreated.get_project(published.id)
+    assert refreshed.roles[0].filledCount == 1
+    assert refreshed.roles[0].remainingCount == 0
+
+    closed = recreated.close_project(owner_id, published.id, refreshed.version)
+    assert recreated.list_project_members(owner_id, closed.id) == [member]
+    assert_service_error("PROJECT_NOT_MATCHABLE", lambda: recreated.add_project_member(closed.id, role_id, second_user_id))
+
+
+def test_closed_role_rejects_new_member(sql_store) -> None:
+    store, _, _ = sql_store
+    owner_id, _, _ = store.login("wechat:app-a:closed-role-owner")
+    user_id, _, _ = store.login("wechat:app-a:closed-role-user")
+    payload = project_payload("关闭岗位项目").model_dump()
+    payload["roles"].append(
+        {
+            "name": "已关闭岗位",
+            "skills": ["Python"],
+            "headcount": 1,
+            "hoursPerWeek": 8,
+            "status": "CLOSED",
+        }
+    )
+    draft = store.create_project(owner_id, ProjectPayload.model_validate(payload))
+    published = store.publish_project(owner_id, draft.id, draft.version)
+
+    assert_service_error(
+        "ROLE_NOT_OPEN",
+        lambda: store.add_project_member(published.id, published.roles[1].id, user_id),
+    )

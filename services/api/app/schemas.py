@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 RolePreference = Literal["LEADER", "MEMBER", "FLEXIBLE"]
 ProjectStatus = Literal["DRAFT", "PUBLISHED", "CLOSED"]
 RoleStatus = Literal["OPEN", "CLOSED"]
+MemberStatus = Literal["ACTIVE"]
 StructuredLabel = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
 
 
@@ -189,6 +190,26 @@ class RoleData(RolePayload):
     requiredSkills: list[str] = Field(default_factory=list)
     requiredAvailabilitySlots: list[AvailabilitySlot] = Field(default_factory=list)
     collaborationRole: RolePreference = "MEMBER"
+    filledCount: int = Field(default=0, ge=0)
+    remainingCount: int = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_capacity(self):
+        if self.filledCount > self.headcount:
+            raise ValueError("filledCount must not exceed headcount")
+        if self.remainingCount != self.headcount - self.filledCount:
+            raise ValueError("remainingCount must equal headcount minus filledCount")
+        return self
+
+
+class ProjectMemberData(BaseModel):
+    id: str
+    projectId: str
+    roleId: str
+    roleName: str
+    userId: str
+    status: MemberStatus = "ACTIVE"
+    joinedAt: datetime
 
 
 class ProjectPayload(BaseModel):

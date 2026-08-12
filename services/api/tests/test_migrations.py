@@ -20,6 +20,7 @@ EXPECTED_TABLES = {
     "match_preference_availability_slots",
     "project_collaboration_scenarios",
     "project_role_availability_slots",
+    "project_members",
 }
 
 
@@ -40,6 +41,13 @@ def test_initial_migration_upgrades_and_downgrades(tmp_path: Path, monkeypatch) 
         assert {column["name"] for column in inspect(engine).get_columns("project_role_skills")} >= {
             "required"
         }
+        member_foreign_keys = inspect(engine).get_foreign_keys("project_members")
+        assert any(
+            foreign_key["constrained_columns"] == ["project_id", "role_id"]
+            and foreign_key["referred_table"] == "project_roles"
+            and foreign_key["referred_columns"] == ["project_id", "id"]
+            for foreign_key in member_foreign_keys
+        )
         command.check(config)
         command.downgrade(config, "base")
         assert inspect(engine).get_table_names() == ["alembic_version"]

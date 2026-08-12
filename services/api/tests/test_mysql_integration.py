@@ -176,3 +176,39 @@ def test_mysql_backed_api_survives_app_recreation() -> None:
             assert recreated_client.get(f"/api/v1/projects/{project_id}", headers=headers).status_code == 200
     finally:
         engine.dispose()
+
+
+def test_mysql_concurrent_members_cannot_overfill_role() -> None:
+    assert MYSQL_URL is not None
+    engine = create_engine(MYSQL_URL, pool_pre_ping=True)
+    factory = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    store = SqlAlchemyStore(factory, engine)
+    suffix = uuid4().hex
+    owner_id, _, _ = store.login(f"wechat:integration:capacity-owner:{suffix}")
+    first_user_id, _, _ = store.login(f"wechat:integration:capacity-first:{suffix}")
+    second_user_id, _, _ = store.login(f"wechat:integration:capacity-second:{suffix}")
+
+    try:
+        draft = store.create_project(owner_id, project_payload())
+        published = store.publish_project(owner_id, draft.id, draft.version)
+        role_id = published.roles[0].id
+
+        def add(user_id: str):
+            try:
+                return store.add_project_member(published.id, role_id, user_id)
+            except ServiceError as error:
+                return error
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(executor.map(add, [first_user_id, second_user_id]))
+
+        successes = [outcome for outcome in outcomes if not isinstance(outcome, ServiceError)]
+        failures = [outcome for outcome in outcomes if isinstance(outcome, ServiceError)]
+        assert len(successes) == 1
+        assert [error.code for error in failures] == ["ROLE_FULL"]
+        assert len(store.list_project_members(owner_id, published.id)) == 1
+        refreshed = store.get_project(published.id)
+        assert refreshed.roles[0].filledCount == 1
+        assert refreshed.roles[0].remainingCount == 0
+    finally:
+        engine.dispose()

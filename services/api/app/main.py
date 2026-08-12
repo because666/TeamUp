@@ -24,6 +24,7 @@ from .schemas import (
     ProfileUpdate,
     ProjectAction,
     ProjectData,
+    ProjectMemberData,
     ProjectPayload,
     ProjectUpdate,
     SessionData,
@@ -189,6 +190,19 @@ def make_app(
         if project.status == "DRAFT" and project.ownerId != user_id:
             raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可见。", 404)
         return envelope(request, project.model_dump(mode="json"))
+
+    @api.get(
+        "/projects/{project_id}/members",
+        tags=["projects"],
+        response_model=Envelope[list[ProjectMemberData]],
+    )
+    def list_project_members(
+        project_id: str,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ):
+        members = app_store.list_project_members(user_id, project_id)
+        return envelope(request, [member.model_dump(mode="json") for member in members])
 
     @api.patch("/projects/{project_id}", tags=["projects"], response_model=Envelope[ProjectData])
     def update_project(project_id: str, payload: ProjectUpdate, request: Request, user_id: str = Depends(current_user)):

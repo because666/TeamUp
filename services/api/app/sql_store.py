@@ -16,6 +16,7 @@ from .db_models import (
     ProfileRow,
     ProfileScenarioRow,
     ProfileSkillRow,
+    ProjectMemberRow,
     ProjectRoleAvailabilitySlotRow,
     ProjectRoleRow,
     ProjectRoleSkillRow,
@@ -31,6 +32,7 @@ from .schemas import (
     ProfileData,
     ProfilePayload,
     ProjectData,
+    ProjectMemberData,
     ProjectPayload,
     ProjectUpdate,
     RoleData,
@@ -279,6 +281,76 @@ class SqlAlchemyStore:
             session.flush()
             return self._project_data(row)
 
+    def add_project_member(self, project_id: str, role_id: str, user_id: str) -> ProjectMemberData:
+        with self._session_factory.begin() as session:
+            project = session.scalar(select(ProjectRow).where(ProjectRow.id == project_id).with_for_update())
+            if project is None:
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目或岗位不存在。", 404)
+            if project.status != "PUBLISHED":
+                raise ServiceError("PROJECT_NOT_MATCHABLE", "项目当前状态不允许新增成员。", 409)
+            user = session.scalar(
+                select(UserRow).where(UserRow.id == user_id, UserRow.status == "ACTIVE").with_for_update()
+            )
+            if user is None:
+                raise ServiceError("RESOURCE_NOT_FOUND", "用户不存在。", 404)
+            role = session.scalar(
+                select(ProjectRoleRow)
+                .where(ProjectRoleRow.id == role_id, ProjectRoleRow.project_id == project_id)
+                .with_for_update()
+            )
+            if role is None:
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目或岗位不存在。", 404)
+            if role.status != "OPEN":
+                raise ServiceError("ROLE_NOT_OPEN", "岗位当前不接受新成员。", 409)
+            existing = session.scalar(
+                select(ProjectMemberRow).where(
+                    ProjectMemberRow.project_id == project_id,
+                    ProjectMemberRow.user_id == user_id,
+                    ProjectMemberRow.status == "ACTIVE",
+                )
+            )
+            if existing is not None:
+                raise ServiceError("MEMBER_ALREADY_EXISTS", "用户已经是该项目成员。", 409)
+            filled_count = session.scalar(
+                select(func.count(ProjectMemberRow.id)).where(
+                    ProjectMemberRow.role_id == role_id,
+                    ProjectMemberRow.status == "ACTIVE",
+                )
+            )
+            if (filled_count or 0) >= role.headcount:
+                raise ServiceError("ROLE_FULL", "岗位容量已满。", 409)
+
+            member = ProjectMemberRow(
+                id=f"mem_{uuid4().hex}",
+                project_id=project_id,
+                role_id=role_id,
+                user_id=user_id,
+                status="ACTIVE",
+                joined_at=db_now(),
+            )
+            session.add(member)
+            try:
+                session.flush()
+            except IntegrityError:
+                raise ServiceError("MEMBER_ALREADY_EXISTS", "用户已经是该项目成员。", 409) from None
+            return self._project_member_data(member, role.name)
+
+    def list_project_members(self, requester_id: str, project_id: str) -> list[ProjectMemberData]:
+        with self._session_factory() as session:
+            project = session.scalar(self._project_query().where(ProjectRow.id == project_id))
+            if project is None:
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可见。", 404)
+            active_members = [member for member in project.members if member.status == "ACTIVE"]
+            if project.owner_id != requester_id and not any(
+                member.user_id == requester_id for member in active_members
+            ):
+                raise ServiceError("FORBIDDEN", "你没有权限查看该项目成员。", 403)
+            role_names = {role.id: role.name for role in project.roles}
+            return [
+                self._project_member_data(member, role_names[member.role_id])
+                for member in sorted(active_members, key=lambda item: (item.joined_at, item.id))
+            ]
+
     def list_projects(self, status: str, limit: int, cursor: str | None) -> tuple[list[ProjectData], str | None]:
         with self._session_factory() as session:
             sort_time = func.coalesce(ProjectRow.published_at, ProjectRow.created_at)
@@ -313,6 +385,7 @@ class SqlAlchemyStore:
             selectinload(ProjectRow.roles).selectinload(ProjectRoleRow.skills),
             selectinload(ProjectRow.roles).selectinload(ProjectRoleRow.availability_slots),
             selectinload(ProjectRow.scenarios),
+            selectinload(ProjectRow.members),
         )
 
     @staticmethod
@@ -459,6 +532,10 @@ class SqlAlchemyStore:
     @staticmethod
     def _project_data(row: ProjectRow) -> ProjectData:
         roles = sorted(row.roles, key=lambda item: item.position)
+        filled_by_role: dict[str, int] = {}
+        for member in row.members:
+            if member.status == "ACTIVE":
+                filled_by_role[member.role_id] = filled_by_role.get(member.role_id, 0) + 1
         return ProjectData.model_validate(
             {
                 "id": row.id,
@@ -500,6 +577,8 @@ class SqlAlchemyStore:
                                 for item in sorted(role.availability_slots, key=lambda item: item.position)
                             ],
                             "collaborationRole": role.collaboration_role,
+                            "filledCount": filled_by_role.get(role.id, 0),
+                            "remainingCount": role.headcount - filled_by_role.get(role.id, 0),
                             "headcount": role.headcount,
                             "hoursPerWeek": role.hours_per_week,
                             "description": role.description,
@@ -508,6 +587,20 @@ class SqlAlchemyStore:
                     )
                     for role in roles
                 ],
+            }
+        )
+
+    @staticmethod
+    def _project_member_data(row: ProjectMemberRow, role_name: str) -> ProjectMemberData:
+        return ProjectMemberData.model_validate(
+            {
+                "id": row.id,
+                "projectId": row.project_id,
+                "roleId": row.role_id,
+                "roleName": role_name,
+                "userId": row.user_id,
+                "status": row.status,
+                "joinedAt": api_datetime(row.joined_at),
             }
         )
 

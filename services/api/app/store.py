@@ -12,6 +12,7 @@ from .schemas import (
     ProfileData,
     ProfilePayload,
     ProjectData,
+    ProjectMemberData,
     ProjectPayload,
     ProjectUpdate,
     RoleData,
@@ -38,6 +39,8 @@ class Store(Protocol):
     def update_project(self, user_id: str, project_id: str, payload: ProjectUpdate) -> ProjectData: ...
     def publish_project(self, user_id: str, project_id: str, version: int) -> ProjectData: ...
     def close_project(self, user_id: str, project_id: str, version: int) -> ProjectData: ...
+    def add_project_member(self, project_id: str, role_id: str, user_id: str) -> ProjectMemberData: ...
+    def list_project_members(self, requester_id: str, project_id: str) -> list[ProjectMemberData]: ...
     def list_projects(self, status: str, limit: int, cursor: str | None) -> tuple[list[ProjectData], str | None]: ...
     def ready(self) -> bool: ...
 
@@ -52,6 +55,7 @@ class MemoryStore:
         self.profiles: dict[str, ProfileData] = {}
         self.match_preferences: dict[str, MatchPreferencesData] = {}
         self.projects: dict[str, ProjectData] = {}
+        self.project_members: dict[str, ProjectMemberData] = {}
 
     def ready(self) -> bool:
         return True
@@ -224,6 +228,66 @@ class MemoryStore:
             self.projects[project_id] = closed
             return deepcopy(closed)
 
+    def add_project_member(self, project_id: str, role_id: str, user_id: str) -> ProjectMemberData:
+        with self._lock:
+            project = self.projects.get(project_id)
+            if not project:
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目或岗位不存在。", 404)
+            if project.status != "PUBLISHED":
+                raise ServiceError("PROJECT_NOT_MATCHABLE", "项目当前状态不允许新增成员。", 409)
+            if user_id not in self.users_by_subject.values():
+                raise ServiceError("RESOURCE_NOT_FOUND", "用户不存在。", 404)
+            role = next((item for item in project.roles if item.id == role_id), None)
+            if role is None:
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目或岗位不存在。", 404)
+            if role.status != "OPEN":
+                raise ServiceError("ROLE_NOT_OPEN", "岗位当前不接受新成员。", 409)
+            if any(
+                member.projectId == project_id and member.userId == user_id and member.status == "ACTIVE"
+                for member in self.project_members.values()
+            ):
+                raise ServiceError("MEMBER_ALREADY_EXISTS", "用户已经是该项目成员。", 409)
+            if role.filledCount >= role.headcount:
+                raise ServiceError("ROLE_FULL", "岗位容量已满。", 409)
+
+            member = ProjectMemberData(
+                id=f"mem_{uuid4().hex}",
+                projectId=project_id,
+                roleId=role_id,
+                roleName=role.name,
+                userId=user_id,
+                status="ACTIVE",
+                joinedAt=now_utc(),
+            )
+            self.project_members[member.id] = member
+            updated_roles = [
+                item.model_copy(
+                    update={
+                        "filledCount": item.filledCount + 1,
+                        "remainingCount": item.remainingCount - 1,
+                    }
+                )
+                if item.id == role_id
+                else item
+                for item in project.roles
+            ]
+            self.projects[project_id] = project.model_copy(update={"roles": updated_roles})
+            return deepcopy(member)
+
+    def list_project_members(self, requester_id: str, project_id: str) -> list[ProjectMemberData]:
+        with self._lock:
+            project = self.projects.get(project_id)
+            if not project:
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可见。", 404)
+            members = [
+                member
+                for member in self.project_members.values()
+                if member.projectId == project_id and member.status == "ACTIVE"
+            ]
+            if project.ownerId != requester_id and not any(member.userId == requester_id for member in members):
+                raise ServiceError("FORBIDDEN", "你没有权限查看该项目成员。", 403)
+            return deepcopy(sorted(members, key=lambda item: (item.joinedAt, item.id)))
+
     def list_projects(self, status: str, limit: int, cursor: str | None) -> tuple[list[ProjectData], str | None]:
         with self._lock:
             projects = sorted(
@@ -272,4 +336,6 @@ class MemoryStore:
             "requiredSkills": required_skills,
             "requiredAvailabilitySlots": required_slots,
             "collaborationRole": collaboration_role,
+            "filledCount": existing.filledCount if existing else 0,
+            "remainingCount": role.headcount - (existing.filledCount if existing else 0),
         }

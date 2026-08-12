@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import make_app
+from app.store import MemoryStore
 
 
 def make_client() -> TestClient:
@@ -197,3 +198,36 @@ def test_project_matching_fields_and_legacy_update_compatibility() -> None:
     invalid = project_payload()
     invalid["roles"][0]["requiredSkills"] = ["Go"]
     assert client.post("/api/v1/projects", headers=headers, json=invalid).status_code == 422
+
+
+def test_project_member_list_permissions_and_capacity() -> None:
+    store = MemoryStore()
+    client = TestClient(make_app(Settings(environment="test", allow_local_login=True), store_override=store))
+    owner_token = login(client, "member-owner")
+    member_token = login(client, "member-user")
+    outsider_token = login(client, "member-outsider")
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    project = client.post("/api/v1/projects", headers=owner_headers, json=project_payload()).json()["data"]
+    published = client.post(
+        f"/api/v1/projects/{project['id']}/publish",
+        headers=owner_headers,
+        json={"version": project["version"]},
+    ).json()["data"]
+    role_id = published["roles"][0]["id"]
+
+    member_user_id = store.user_for_token(member_token)
+    store.add_project_member(project["id"], role_id, member_user_id)
+    path = f"/api/v1/projects/{project['id']}/members"
+
+    assert client.get(path).status_code == 401
+    assert client.get(path, headers={"Authorization": f"Bearer {outsider_token}"}).status_code == 403
+    owner_view = client.get(path, headers=owner_headers)
+    member_view = client.get(path, headers={"Authorization": f"Bearer {member_token}"})
+    assert owner_view.status_code == 200
+    assert member_view.status_code == 200
+    assert owner_view.json()["data"][0]["userId"] == member_user_id
+    assert owner_view.json()["data"][0]["roleName"] == "后端开发"
+
+    refreshed = client.get(f"/api/v1/projects/{project['id']}", headers=owner_headers).json()["data"]
+    assert refreshed["roles"][0]["filledCount"] == 1
+    assert refreshed["roles"][0]["remainingCount"] == 0

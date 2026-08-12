@@ -9,7 +9,7 @@
 
 FastAPI 基础实现目前已覆盖 `/api/v1` 下的健康检查、微信真实/local 登录、退出、当前用户名片，以及项目创建、详情、更新、发布、关闭和公开列表。
 
-实现返回约定的 `data`/`meta`/`requestId` 信封和结构化错误，并已支持 local/test memory 与 MySQL 8 持久化。`match-v0.1` 纯规则引擎已实现。用户已明确授权按 [ADR-0005](../decisions/ADR-0005-matching-api-data-contract.md) 推荐方案实施首批匹配输入；`role-b/feature/TUP-20260812-match-preferences` 已实现下述偏好路由、项目字段和第二版迁移，但 ADR 和本文仍为 Proposed，合入 `main` 前必须由角色 A 评审。
+实现返回约定的 `data`/`meta`/`requestId` 信封和结构化错误，并已支持 local/test memory 与 MySQL 8 持久化。`match-v0.1` 纯规则引擎已实现。用户已明确授权按 [ADR-0005](../decisions/ADR-0005-matching-api-data-contract.md) 推荐方案实施首批匹配输入；`role-b/feature/TUP-20260812-match-preferences` 已实现偏好路由、项目字段和第二版迁移。堆叠分支 `role-b/feature/TUP-20260812-project-members` 已实现成员读取和岗位容量基础。上述契约仍为 Proposed，合入 `main` 前必须由角色 A 评审。
 
 ### 微信真实登录
 
@@ -106,6 +106,7 @@ FastAPI 基础实现目前已覆盖 `/api/v1` 下的健康检查、微信真实/
 | API-PROJ-03 | PATCH | `/projects/{projectId}` | 更新自己的项目 | PROJ-001 |
 | API-PROJ-04 | POST | `/projects/{projectId}/publish` | 发布项目 | PROJ-001 |
 | API-PROJ-05 | POST | `/projects/{projectId}/close` | 关闭项目 | PROJ-001 |
+| API-PROJ-MEMBER-01 | GET | `/projects/{projectId}/members` | owner/有效成员读取项目成员 | PROJ-001 / TEAM-001 |
 | API-DISC-01 | GET | `/projects` | 项目大厅筛选 | DISC-001 |
 | API-DISC-02 | GET | `/profiles` | 人才大厅筛选 | DISC-002 |
 | API-MATCH-PREF-01 | GET | `/me/match-preferences` | 获取匹配方向和时间偏好 | MATCH-001/002 |
@@ -171,6 +172,53 @@ FastAPI 基础实现目前已覆盖 `/api/v1` 下的健康检查、微信真实/
 - 项目层增加 `collaborationScenarios`；新建省略时为 `[]`，更新省略时保留原值。它与用户名片已有字段应使用同一受控枚举，该词表仍待角色 A 提供。
 
 专业和经历因素在受控专业分类及独立 experience 契约落地前必须保持 missing，不允许用自由文本 `major`、`bio` 或项目说明猜分。
+
+### 项目成员与岗位容量（Proposed，任务分支已实现）
+
+现有岗位响应增加只读字段：
+
+```json
+{
+  "id": "role_opaque_id",
+  "headcount": 2,
+  "filledCount": 1,
+  "remainingCount": 1
+}
+```
+
+- `filledCount` 只统计 `ACTIVE` 成员，`remainingCount = headcount - filledCount`；
+- 客户端不得提交或修改这两个字段，服务端每次从成员关系计算；
+- 项目关闭后成员关系保留，容量字段仍反映已有成员，但不允许新增成员；
+- P0 一个用户在同一项目最多属于一个岗位。
+
+`API-PROJ-MEMBER-01`：
+
+```http
+GET /api/v1/projects/{projectId}/members
+Authorization: Bearer <token>
+```
+
+成功响应的 `data` 是成员数组：
+
+```json
+[
+  {
+    "id": "mem_opaque_id",
+    "projectId": "prj_opaque_id",
+    "roleId": "role_opaque_id",
+    "roleName": "后端开发",
+    "userId": "usr_opaque_id",
+    "status": "ACTIVE",
+    "joinedAt": "2026-08-12T08:00:00Z"
+  }
+]
+```
+
+- 仅项目 owner 或该项目 `ACTIVE` 成员可读取；其他已认证用户返回 `403 FORBIDDEN`；
+- 不存在或不可见项目返回 `404 RESOURCE_NOT_FOUND`，未认证返回 `401`；
+- 响应不包含微信身份、联系方式、非公开名片或内部邀请信息；
+- 当前没有公共成员写接口。成员只能由后续 `API-TEAM-02` 接受邀请事务创建，禁止客户端直接添加成员；
+- 内部创建必须锁定项目和岗位，重新检查 `PUBLISHED`、岗位 `OPEN`、用户状态、唯一成员与容量；失败使用 `PROJECT_NOT_MATCHABLE`、`ROLE_NOT_OPEN`、`MEMBER_ALREADY_EXISTS` 或 `ROLE_FULL`。
 
 ### ProjectSummary
 
