@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from app.db_models import Base, SessionRow, UserRow
+from app.db_models import Base, InvitationRow, SessionRow, UserRow
 from app.errors import ServiceError
 from app.schemas import MatchPreferencesPayload, ProfilePayload, ProjectPayload, ProjectUpdate
 from app.sql_store import SqlAlchemyStore, db_now, token_digest
@@ -311,3 +311,68 @@ def test_blocks_are_bidirectional_and_prevent_new_members(sql_store) -> None:
     assert store.remove_block(owner_id, member_id) is False
     assert store.users_blocked(owner_id, member_id) is False
     assert store.add_project_member(published.id, published.roles[0].id, member_id).userId == member_id
+
+
+def test_invitations_persist_accept_reject_expire_and_enforce_permissions(sql_store) -> None:
+    store, factory, engine = sql_store
+    owner_id, _, _ = store.login("wechat:app-a:invitation-owner")
+    invitee_id, _, _ = store.login("wechat:app-a:invitation-user")
+    outsider_id, _, _ = store.login("wechat:app-a:invitation-outsider")
+    second_id, _, _ = store.login("wechat:app-a:invitation-second")
+    draft = store.create_project(owner_id, project_payload("邀请项目"))
+    published = store.publish_project(owner_id, draft.id, draft.version)
+    role_id = published.roles[0].id
+
+    invitation = store.create_invitation(owner_id, published.id, role_id, invitee_id)
+    assert store.create_invitation(owner_id, published.id, role_id, invitee_id) == invitation
+    recreated = SqlAlchemyStore(factory, engine)
+    assert_service_error(
+        "RESOURCE_NOT_FOUND",
+        lambda: recreated.accept_invitation(outsider_id, invitation.id),
+    )
+    accepted = recreated.accept_invitation(invitee_id, invitation.id)
+    assert accepted.invitation.status == "ACCEPTED"
+    assert accepted.member.userId == invitee_id
+    assert recreated.accept_invitation(invitee_id, invitation.id) == accepted
+
+    second_project = recreated.create_project(owner_id, project_payload("拒绝邀请项目"))
+    second_project = recreated.publish_project(owner_id, second_project.id, second_project.version)
+    rejected_invitation = recreated.create_invitation(
+        owner_id, second_project.id, second_project.roles[0].id, second_id
+    )
+    rejected = recreated.reject_invitation(second_id, rejected_invitation.id)
+    assert rejected.status == "REJECTED"
+    assert recreated.reject_invitation(second_id, rejected_invitation.id) == rejected
+    assert_service_error(
+        "INVITATION_NOT_ACTIONABLE",
+        lambda: recreated.accept_invitation(second_id, rejected_invitation.id),
+    )
+
+    expiring_project = recreated.create_project(owner_id, project_payload("过期邀请项目"))
+    expiring_project = recreated.publish_project(owner_id, expiring_project.id, expiring_project.version)
+    expiring = recreated.create_invitation(
+        owner_id, expiring_project.id, expiring_project.roles[0].id, second_id
+    )
+    with factory.begin() as session:
+        row = session.get(InvitationRow, expiring.id)
+        assert row is not None
+        row.expires_at = db_now() - timedelta(seconds=1)
+    assert_service_error(
+        "INVITATION_NOT_ACTIONABLE",
+        lambda: recreated.accept_invitation(second_id, expiring.id),
+    )
+    replacement = recreated.create_invitation(
+        owner_id, expiring_project.id, expiring_project.roles[0].id, second_id
+    )
+    assert replacement.id != expiring.id
+
+    closed_project = recreated.create_project(owner_id, project_payload("关闭邀请项目"))
+    closed_project = recreated.publish_project(owner_id, closed_project.id, closed_project.version)
+    closing = recreated.create_invitation(
+        owner_id, closed_project.id, closed_project.roles[0].id, second_id
+    )
+    recreated.close_project(owner_id, closed_project.id, closed_project.version)
+    assert_service_error(
+        "PROJECT_NOT_MATCHABLE",
+        lambda: recreated.accept_invitation(second_id, closing.id),
+    )

@@ -16,6 +16,9 @@ from .schemas import (
     BlockRequest,
     Envelope,
     HealthData,
+    InvitationAcceptData,
+    InvitationCreateRequest,
+    InvitationData,
     LoginRequest,
     LogoutData,
     MatchPreferencesData,
@@ -72,6 +75,7 @@ def make_app(
             {"name": "profile"},
             {"name": "matching"},
             {"name": "projects"},
+            {"name": "team"},
             {"name": "safety"},
         ],
     )
@@ -154,6 +158,46 @@ def make_app(
             raise ServiceError("VALIDATION_ERROR", "用户标识不符合接口要求。", 422)
         removed = app_store.remove_block(user_id, blocked_user_id)
         return envelope(request, {"blockedUserId": blocked_user_id, "removed": removed})
+
+    @api.post("/invitations", tags=["team"], response_model=Envelope[InvitationData])
+    def create_invitation(
+        payload: InvitationCreateRequest,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ):
+        invitation = app_store.create_invitation(
+            user_id,
+            payload.projectId,
+            payload.roleId,
+            payload.inviteeUserId,
+        )
+        return envelope(request, invitation.model_dump(mode="json"))
+
+    @api.post(
+        "/invitations/{invitation_id}/accept",
+        tags=["team"],
+        response_model=Envelope[InvitationAcceptData],
+    )
+    def accept_invitation(
+        invitation_id: str,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ):
+        result = app_store.accept_invitation(user_id, invitation_id)
+        return envelope(request, result.model_dump(mode="json"))
+
+    @api.post(
+        "/invitations/{invitation_id}/reject",
+        tags=["team"],
+        response_model=Envelope[InvitationData],
+    )
+    def reject_invitation(
+        invitation_id: str,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ):
+        invitation = app_store.reject_invitation(user_id, invitation_id)
+        return envelope(request, invitation.model_dump(mode="json"))
 
     @api.get("/me/profile", tags=["profile"], response_model=Envelope[ProfileData | None])
     def get_profile(request: Request, user_id: str = Depends(current_user)):

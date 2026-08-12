@@ -279,3 +279,101 @@ def test_delete_block_cors_preflight() -> None:
     )
     assert response.status_code == 200
     assert "DELETE" in response.headers["access-control-allow-methods"]
+
+
+def test_invitation_create_accept_permissions_and_idempotency() -> None:
+    store = MemoryStore()
+    client = TestClient(make_app(Settings(environment="test", allow_local_login=True), store_override=store))
+    owner_token = login(client, "invite-owner")
+    invitee_token = login(client, "invite-user")
+    outsider_token = login(client, "invite-outsider")
+    owner_id = store.user_for_token(owner_token)
+    invitee_id = store.user_for_token(invitee_token)
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    invitee_headers = {"Authorization": f"Bearer {invitee_token}"}
+    outsider_headers = {"Authorization": f"Bearer {outsider_token}"}
+    draft = client.post("/api/v1/projects", headers=owner_headers, json=project_payload()).json()["data"]
+    role_id = draft["roles"][0]["id"]
+    payload = {"projectId": draft["id"], "roleId": role_id, "inviteeUserId": invitee_id}
+
+    assert client.post("/api/v1/invitations", json=payload).status_code == 401
+    assert client.post("/api/v1/invitations", headers=owner_headers, json=payload).status_code == 409
+    published = client.post(
+        f"/api/v1/projects/{draft['id']}/publish",
+        headers=owner_headers,
+        json={"version": draft["version"]},
+    ).json()["data"]
+    payload["roleId"] = published["roles"][0]["id"]
+    assert client.post("/api/v1/invitations", headers=outsider_headers, json=payload).status_code == 403
+    self_payload = {**payload, "inviteeUserId": owner_id}
+    assert client.post("/api/v1/invitations", headers=owner_headers, json=self_payload).status_code == 422
+
+    created = client.post("/api/v1/invitations", headers=owner_headers, json=payload)
+    assert created.status_code == 200
+    invitation = created.json()["data"]
+    assert invitation["status"] == "PENDING"
+    assert invitation["inviteeUserId"] == invitee_id
+    repeated = client.post("/api/v1/invitations", headers=owner_headers, json=payload)
+    assert repeated.status_code == 200
+    assert repeated.json()["data"] == invitation
+
+    accept_path = f"/api/v1/invitations/{invitation['id']}/accept"
+    assert client.post(accept_path).status_code == 401
+    assert client.post(accept_path, headers=outsider_headers).status_code == 404
+    accepted = client.post(accept_path, headers=invitee_headers)
+    assert accepted.status_code == 200
+    accepted_data = accepted.json()["data"]
+    assert accepted_data["invitation"]["status"] == "ACCEPTED"
+    assert accepted_data["member"]["userId"] == invitee_id
+    assert client.post(accept_path, headers=invitee_headers).json()["data"] == accepted_data
+    assert len(store.project_members) == 1
+
+    schema = client.app.openapi()
+    assert "post" in schema["paths"]["/api/v1/invitations"]
+    assert "post" in schema["paths"]["/api/v1/invitations/{invitation_id}/accept"]
+    assert "post" in schema["paths"]["/api/v1/invitations/{invitation_id}/reject"]
+
+
+def test_invitation_reject_expiry_block_and_capacity_boundaries() -> None:
+    store = MemoryStore()
+    client = TestClient(make_app(Settings(environment="test", allow_local_login=True), store_override=store))
+    owner_token = login(client, "reject-owner")
+    invitee_token = login(client, "reject-user")
+    second_token = login(client, "reject-second")
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    invitee_headers = {"Authorization": f"Bearer {invitee_token}"}
+    owner_id = store.user_for_token(owner_token)
+    invitee_id = store.user_for_token(invitee_token)
+    second_id = store.user_for_token(second_token)
+    draft = client.post("/api/v1/projects", headers=owner_headers, json=project_payload()).json()["data"]
+    published = client.post(
+        f"/api/v1/projects/{draft['id']}/publish",
+        headers=owner_headers,
+        json={"version": draft["version"]},
+    ).json()["data"]
+    role_id = published["roles"][0]["id"]
+    payload = {"projectId": published["id"], "roleId": role_id, "inviteeUserId": invitee_id}
+
+    store.create_block(invitee_id, owner_id)
+    assert client.post("/api/v1/invitations", headers=owner_headers, json=payload).status_code == 409
+    store.remove_block(invitee_id, owner_id)
+    invitation = client.post("/api/v1/invitations", headers=owner_headers, json=payload).json()["data"]
+    reject_path = f"/api/v1/invitations/{invitation['id']}/reject"
+    rejected = client.post(reject_path, headers=invitee_headers)
+    assert rejected.status_code == 200
+    assert rejected.json()["data"]["status"] == "REJECTED"
+    assert client.post(reject_path, headers=invitee_headers).json()["data"] == rejected.json()["data"]
+    assert client.post(f"/api/v1/invitations/{invitation['id']}/accept", headers=invitee_headers).status_code == 409
+
+    second_payload = {**payload, "inviteeUserId": second_id}
+    expiring = client.post("/api/v1/invitations", headers=owner_headers, json=second_payload).json()["data"]
+    stored = store.invitations[expiring["id"]]
+    store.invitations[expiring["id"]] = stored.model_copy(update={"expiresAt": stored.createdAt})
+    second_headers = {"Authorization": f"Bearer {second_token}"}
+    assert client.post(f"/api/v1/invitations/{expiring['id']}/accept", headers=second_headers).status_code == 409
+    replacement = client.post("/api/v1/invitations", headers=owner_headers, json=second_payload)
+    assert replacement.status_code == 200
+    assert replacement.json()["data"]["id"] != expiring["id"]
+
+    store.add_project_member(published["id"], role_id, invitee_id)
+    assert client.post("/api/v1/invitations", headers=owner_headers, json=second_payload).status_code == 409

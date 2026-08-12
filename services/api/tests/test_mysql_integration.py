@@ -237,3 +237,56 @@ def test_mysql_block_persistence_and_member_blocking() -> None:
         assert recreated.add_project_member(published.id, published.roles[0].id, member_id).userId == member_id
     finally:
         engine.dispose()
+
+
+def test_mysql_invitations_persist_and_concurrent_accept_cannot_overfill() -> None:
+    assert MYSQL_URL is not None
+    engine = create_engine(MYSQL_URL, pool_pre_ping=True)
+    factory = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    store = SqlAlchemyStore(factory, engine)
+    suffix = uuid4().hex
+    owner_id, _, _ = store.login(f"wechat:integration:invite-owner:{suffix}")
+    first_id, _, _ = store.login(f"wechat:integration:invite-first:{suffix}")
+    second_id, _, _ = store.login(f"wechat:integration:invite-second:{suffix}")
+    try:
+        draft = store.create_project(owner_id, project_payload())
+        published = store.publish_project(owner_id, draft.id, draft.version)
+        role_id = published.roles[0].id
+        first = store.create_invitation(owner_id, published.id, role_id, first_id)
+        second = store.create_invitation(owner_id, published.id, role_id, second_id)
+
+        recreated = SqlAlchemyStore(factory, engine)
+        assert recreated.create_invitation(owner_id, published.id, role_id, first_id) == first
+
+        def accept(invitee_and_invitation):
+            invitee_id, invitation_id = invitee_and_invitation
+            try:
+                return recreated.accept_invitation(invitee_id, invitation_id)
+            except ServiceError as error:
+                return error
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(
+                executor.map(
+                    accept,
+                    [(first_id, first.id), (second_id, second.id)],
+                )
+            )
+
+        successes = [outcome for outcome in outcomes if not isinstance(outcome, ServiceError)]
+        failures = [outcome for outcome in outcomes if isinstance(outcome, ServiceError)]
+        assert len(successes) == 1
+        assert [error.code for error in failures] == ["ROLE_FULL"]
+        assert len(recreated.list_project_members(owner_id, published.id)) == 1
+
+        blocked_project = recreated.create_project(owner_id, project_payload())
+        blocked_project = recreated.publish_project(owner_id, blocked_project.id, blocked_project.version)
+        blocked_invitation = recreated.create_invitation(
+            owner_id, blocked_project.id, blocked_project.roles[0].id, second_id
+        )
+        recreated.create_block(second_id, owner_id)
+        with pytest.raises(ServiceError) as captured:
+            recreated.accept_invitation(second_id, blocked_invitation.id)
+        assert captured.value.code == "USER_BLOCKED"
+    finally:
+        engine.dispose()

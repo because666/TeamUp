@@ -269,3 +269,40 @@ class ProjectMemberRow(Base):
         Index("ix_project_members_user_status", "user_id", "status"),
         CheckConstraint("status IN ('ACTIVE')", name="ck_project_members_status"),
     )
+
+
+class InvitationRow(Base):
+    __tablename__ = "invitations"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    role_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    inviter_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    invitee_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    pending_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "role_id"],
+            ["project_roles.project_id", "project_roles.id"],
+            ondelete="RESTRICT",
+            name="fk_invitations_project_role",
+        ),
+        UniqueConstraint("pending_key", name="uq_invitations_pending_key"),
+        Index("ix_invitations_invitee_status_expires", "invitee_id", "status", "expires_at"),
+        Index("ix_invitations_project_status", "project_id", "status"),
+        CheckConstraint(
+            "status IN ('PENDING','ACCEPTED','REJECTED','EXPIRED','CANCELLED')",
+            name="ck_invitations_status",
+        ),
+        CheckConstraint("inviter_id <> invitee_id", name="ck_invitations_not_self"),
+        CheckConstraint(
+            "(status = 'PENDING' AND pending_key IS NOT NULL) OR "
+            "(status <> 'PENDING' AND pending_key IS NULL)",
+            name="ck_invitations_pending_key",
+        ),
+    )

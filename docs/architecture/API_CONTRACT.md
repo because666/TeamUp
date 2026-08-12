@@ -85,7 +85,7 @@ FastAPI 基础实现目前已覆盖 `/api/v1` 下的健康检查、微信真实/
 
 ## 5. 幂等与并发
 
-- 创建邀请、接受邀请、发送消息等可能重复提交的写操作支持 `Idempotency-Key`。
+- 创建邀请和接受邀请当前使用领域唯一键与状态机提供重复保护；通用 `Idempotency-Key` 持久化仍为 `Proposed`，后续消息等不能据此假定已实现。
 - 更新资源使用 `version` 或等效乐观锁；版本冲突返回 `409 CONFLICT`。
 - 接受邀请由服务端事务再次检查项目状态、岗位容量、过期时间和成员唯一性。
 
@@ -220,6 +220,79 @@ Authorization: Bearer <token>
 - 当前没有公共成员写接口。成员只能由后续 `API-TEAM-02` 接受邀请事务创建，禁止客户端直接添加成员；
 - 内部创建必须锁定项目和岗位，重新检查 `PUBLISHED`、岗位 `OPEN`、用户状态、唯一成员与容量；失败使用 `PROJECT_NOT_MATCHABLE`、`ROLE_NOT_OPEN`、`MEMBER_ALREADY_EXISTS` 或 `ROLE_FULL`。
 
+### 项目岗位邀请（Proposed，任务分支已实现）
+
+`API-TEAM-01`：
+
+```http
+POST /api/v1/invitations
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "projectId": "prj_opaque_id",
+  "roleId": "role_opaque_id",
+  "inviteeUserId": "usr_opaque_id"
+}
+```
+
+成功返回：
+
+```json
+{
+  "id": "inv_opaque_id",
+  "projectId": "prj_opaque_id",
+  "roleId": "role_opaque_id",
+  "inviterUserId": "usr_owner_id",
+  "inviteeUserId": "usr_invitee_id",
+  "status": "PENDING",
+  "expiresAt": "2026-08-19T08:00:00Z",
+  "createdAt": "2026-08-12T08:00:00Z",
+  "respondedAt": null
+}
+```
+
+- 只有项目 owner 可创建；项目必须为 `PUBLISHED`，岗位必须为 `OPEN` 且有剩余容量；
+- invitee 必须是另一名有效用户，且不是项目现有成员；任一方向拉黑均返回 `409 USER_BLOCKED`；
+- 首版有效期固定为服务端创建后 7 天，该时长由角色 A 评审；客户端不提交或延长过期时间；
+- 同一项目、岗位和 invitee 最多一条有效 `PENDING` 邀请；重复创建返回原 `id`、`createdAt` 和 `expiresAt`；
+- 自邀返回 `422 CANNOT_INVITE_SELF`；其他失败使用 `FORBIDDEN`、`PROJECT_NOT_MATCHABLE`、`ROLE_NOT_OPEN`、`ROLE_FULL`、`MEMBER_ALREADY_EXISTS` 或 `RESOURCE_NOT_FOUND`。
+
+`API-TEAM-02`：
+
+```http
+POST /api/v1/invitations/{invitationId}/accept
+Authorization: Bearer <token>
+```
+
+只有 invitee 可操作；其他用户统一收到 `404 RESOURCE_NOT_FOUND`。成功响应的 `data` 为：
+
+```json
+{
+  "invitation": {"id": "inv_opaque_id", "status": "ACCEPTED"},
+  "member": {
+    "id": "mem_opaque_id",
+    "projectId": "prj_opaque_id",
+    "roleId": "role_opaque_id",
+    "roleName": "后端开发",
+    "userId": "usr_invitee_id",
+    "status": "ACTIVE",
+    "joinedAt": "2026-08-12T08:05:00Z"
+  }
+}
+```
+
+实际邀请对象包含与创建响应相同的完整字段。接受事务按固定锁顺序重新检查邀请、用户、双向拉黑、项目、岗位、容量和成员唯一性；并发接受不能超额。本人重复接受已 `ACCEPTED` 邀请返回原确定结果，不创建第二个成员。已拒绝、过期、取消或其他不可接受状态返回 `409 INVITATION_NOT_ACTIONABLE`。
+
+`API-TEAM-03`：
+
+```http
+POST /api/v1/invitations/{invitationId}/reject
+Authorization: Bearer <token>
+```
+
+只有 invitee 可拒绝自己的 `PENDING` 邀请。成功返回状态为 `REJECTED` 的完整邀请；重复拒绝幂等返回原结果。已接受、过期或取消的邀请返回 `409 INVITATION_NOT_ACTIONABLE`。拒绝不创建成员，也不记录拒绝原因。
+
 ### 用户拉黑（Proposed，任务分支已实现）
 
 `API-SAFE-02`：
@@ -255,7 +328,7 @@ Authorization: Bearer <token>
 
 响应为 `{"blockedUserId":"usr_opaque_id","removed":true}`；关系不存在时仍返回 `200` 和 `removed=false`。取消拉黑只删除当前用户创建的单向关系，不删除对方创建的关系，也不恢复历史邀请、消息或成员关系。
 
-服务端内部双向检查只要存在 `(A,B)` 或 `(B,A)` 任一关系就视为已阻断。当前分支已将该检查接入新成员创建；消息、邀请、发现和匹配模块实现时必须复用同一检查，不能根据客户端状态判断。
+服务端内部双向检查只要存在 `(A,B)` 或 `(B,A)` 任一关系就视为已阻断。当前堆叠分支已将该检查接入新成员创建以及邀请创建/接受；消息、发现和匹配模块实现时必须复用同一检查，不能根据客户端状态判断。
 
 ### ProjectSummary
 

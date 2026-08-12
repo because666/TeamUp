@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from .db_models import (
     BlockRow,
+    InvitationRow,
     MatchPreferenceAvailabilitySlotRow,
     MatchPreferenceDirectionRow,
     MatchPreferenceRow,
@@ -29,6 +30,8 @@ from .db_models import (
 from .errors import ServiceError
 from .schemas import (
     BlockData,
+    InvitationAcceptData,
+    InvitationData,
     MatchPreferencesData,
     MatchPreferencesPayload,
     ProfileData,
@@ -163,6 +166,165 @@ class SqlAlchemyStore:
     def users_blocked(self, first_user_id: str, second_user_id: str) -> bool:
         with self._session_factory() as session:
             return self._users_blocked(session, first_user_id, second_user_id)
+
+    def create_invitation(
+        self, inviter_id: str, project_id: str, role_id: str, invitee_id: str
+    ) -> InvitationData:
+        with self._session_factory.begin() as session:
+            project = session.scalar(select(ProjectRow).where(ProjectRow.id == project_id).with_for_update())
+            self._require_owner(project, inviter_id)
+            if inviter_id == invitee_id:
+                raise ServiceError("CANNOT_INVITE_SELF", "不能邀请自己加入项目。", 422)
+            if project.status != "PUBLISHED":
+                raise ServiceError("PROJECT_NOT_MATCHABLE", "项目当前状态不允许创建邀请。", 409)
+            users = list(
+                session.scalars(
+                    select(UserRow)
+                    .where(UserRow.id.in_(sorted((inviter_id, invitee_id))))
+                    .order_by(UserRow.id)
+                    .with_for_update()
+                )
+            )
+            invitee = next((item for item in users if item.id == invitee_id and item.status == "ACTIVE"), None)
+            if invitee is None:
+                raise ServiceError("RESOURCE_NOT_FOUND", "用户不存在或不可见。", 404)
+            if self._users_blocked(session, inviter_id, invitee_id):
+                raise ServiceError("USER_BLOCKED", "当前用户关系不允许创建邀请。", 409)
+            role = session.scalar(
+                select(ProjectRoleRow)
+                .where(ProjectRoleRow.id == role_id, ProjectRoleRow.project_id == project_id)
+                .with_for_update()
+            )
+            if role is None:
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目或岗位不存在。", 404)
+            self._require_open_role_capacity(session, role)
+            if self._active_member(session, project_id, invitee_id) is not None:
+                raise ServiceError("MEMBER_ALREADY_EXISTS", "用户已经是该项目成员。", 409)
+
+            timestamp = db_now()
+            pending_key = self._invitation_pending_key(project_id, role_id, invitee_id)
+            existing = session.scalar(
+                select(InvitationRow).where(InvitationRow.pending_key == pending_key).with_for_update()
+            )
+            if existing is not None and existing.expires_at > timestamp:
+                return self._invitation_data(existing)
+            if existing is not None:
+                existing.status = "EXPIRED"
+                existing.pending_key = None
+                existing.responded_at = timestamp
+                session.flush()
+
+            row = InvitationRow(
+                id=f"inv_{uuid4().hex}",
+                project_id=project_id,
+                role_id=role_id,
+                inviter_id=inviter_id,
+                invitee_id=invitee_id,
+                status="PENDING",
+                pending_key=pending_key,
+                expires_at=timestamp + timedelta(days=7),
+                created_at=timestamp,
+                responded_at=None,
+            )
+            session.add(row)
+            session.flush()
+            return self._invitation_data(row)
+
+    def accept_invitation(self, invitee_id: str, invitation_id: str) -> InvitationAcceptData:
+        # Locate the project outside the write transaction. On MySQL REPEATABLE READ,
+        # a normal read before the project lock would freeze an obsolete capacity snapshot.
+        with self._session_factory() as lookup_session:
+            visible = lookup_session.get(InvitationRow, invitation_id)
+            if visible is None or visible.invitee_id != invitee_id:
+                raise ServiceError("RESOURCE_NOT_FOUND", "邀请不存在或不可见。", 404)
+            project_id = visible.project_id
+            role_id = visible.role_id
+        with self._session_factory.begin() as session:
+            project = session.scalar(
+                select(ProjectRow).where(ProjectRow.id == project_id).with_for_update()
+            )
+            if project is None:
+                raise ServiceError("INVITATION_NOT_ACTIONABLE", "邀请已处理、过期或不可接受。", 409)
+            users = list(
+                session.scalars(
+                    select(UserRow)
+                    .where(UserRow.id.in_(sorted((project.owner_id, invitee_id))))
+                    .order_by(UserRow.id)
+                    .with_for_update()
+                )
+            )
+            role = session.scalar(
+                select(ProjectRoleRow)
+                .where(ProjectRoleRow.id == role_id, ProjectRoleRow.project_id == project.id)
+                .with_for_update()
+            )
+            invitation = session.scalar(
+                select(InvitationRow)
+                .where(InvitationRow.id == invitation_id)
+                .execution_options(populate_existing=True)
+                .with_for_update()
+            )
+            if invitation is None or invitation.invitee_id != invitee_id:
+                raise ServiceError("RESOURCE_NOT_FOUND", "邀请不存在或不可见。", 404)
+            if invitation.status == "ACCEPTED":
+                member = self._active_member(session, invitation.project_id, invitee_id)
+                if member is None or role is None:
+                    raise ServiceError("INTERNAL_ERROR", "邀请成员状态不一致。", 500)
+                return InvitationAcceptData(
+                    invitation=self._invitation_data(invitation),
+                    member=self._project_member_data(member, role.name),
+                )
+            timestamp = db_now()
+            if invitation.status != "PENDING" or invitation.expires_at <= timestamp:
+                raise ServiceError("INVITATION_NOT_ACTIONABLE", "邀请已处理、过期或不可接受。", 409)
+            if project.status != "PUBLISHED":
+                raise ServiceError("PROJECT_NOT_MATCHABLE", "项目当前状态不允许接受邀请。", 409)
+            candidate = next((item for item in users if item.id == invitee_id and item.status == "ACTIVE"), None)
+            if candidate is None:
+                raise ServiceError("INVITATION_NOT_ACTIONABLE", "邀请已处理、过期或不可接受。", 409)
+            if self._users_blocked(session, project.owner_id, invitee_id):
+                raise ServiceError("USER_BLOCKED", "当前用户关系不允许接受邀请。", 409)
+            if role is None:
+                raise ServiceError("INVITATION_NOT_ACTIONABLE", "邀请已处理、过期或不可接受。", 409)
+            self._require_open_role_capacity(session, role)
+            if self._active_member(session, project.id, invitee_id) is not None:
+                raise ServiceError("MEMBER_ALREADY_EXISTS", "用户已经是该项目成员。", 409)
+
+            member = ProjectMemberRow(
+                id=f"mem_{uuid4().hex}",
+                project_id=project.id,
+                role_id=role.id,
+                user_id=invitee_id,
+                status="ACTIVE",
+                joined_at=timestamp,
+            )
+            invitation.status = "ACCEPTED"
+            invitation.pending_key = None
+            invitation.responded_at = timestamp
+            session.add(member)
+            session.flush()
+            return InvitationAcceptData(
+                invitation=self._invitation_data(invitation),
+                member=self._project_member_data(member, role.name),
+            )
+
+    def reject_invitation(self, invitee_id: str, invitation_id: str) -> InvitationData:
+        with self._session_factory.begin() as session:
+            invitation = session.scalar(
+                select(InvitationRow).where(InvitationRow.id == invitation_id).with_for_update()
+            )
+            if invitation is None or invitation.invitee_id != invitee_id:
+                raise ServiceError("RESOURCE_NOT_FOUND", "邀请不存在或不可见。", 404)
+            if invitation.status == "REJECTED":
+                return self._invitation_data(invitation)
+            timestamp = db_now()
+            if invitation.status != "PENDING" or invitation.expires_at <= timestamp:
+                raise ServiceError("INVITATION_NOT_ACTIONABLE", "邀请已处理、过期或不可拒绝。", 409)
+            invitation.status = "REJECTED"
+            invitation.pending_key = None
+            invitation.responded_at = timestamp
+            session.flush()
+            return self._invitation_data(invitation)
 
     def get_profile(self, user_id: str) -> ProfileData | None:
         with self._session_factory() as session:
@@ -429,6 +591,33 @@ class SqlAlchemyStore:
         )
 
     @staticmethod
+    def _active_member(session: Session, project_id: str, user_id: str) -> ProjectMemberRow | None:
+        return session.scalar(
+            select(ProjectMemberRow).where(
+                ProjectMemberRow.project_id == project_id,
+                ProjectMemberRow.user_id == user_id,
+                ProjectMemberRow.status == "ACTIVE",
+            )
+        )
+
+    @staticmethod
+    def _require_open_role_capacity(session: Session, role: ProjectRoleRow) -> None:
+        if role.status != "OPEN":
+            raise ServiceError("ROLE_NOT_OPEN", "岗位当前不接受新成员。", 409)
+        filled_count = session.scalar(
+            select(func.count(ProjectMemberRow.id)).where(
+                ProjectMemberRow.role_id == role.id,
+                ProjectMemberRow.status == "ACTIVE",
+            )
+        )
+        if (filled_count or 0) >= role.headcount:
+            raise ServiceError("ROLE_FULL", "岗位容量已满。", 409)
+
+    @staticmethod
+    def _invitation_pending_key(project_id: str, role_id: str, invitee_id: str) -> str:
+        return f"{project_id}:{role_id}:{invitee_id}"
+
+    @staticmethod
     def _match_preferences_query() -> Select[tuple[MatchPreferenceRow]]:
         return select(MatchPreferenceRow).options(
             selectinload(MatchPreferenceRow.directions),
@@ -657,6 +846,22 @@ class SqlAlchemyStore:
                 "userId": row.user_id,
                 "status": row.status,
                 "joinedAt": api_datetime(row.joined_at),
+            }
+        )
+
+    @staticmethod
+    def _invitation_data(row: InvitationRow) -> InvitationData:
+        return InvitationData.model_validate(
+            {
+                "id": row.id,
+                "projectId": row.project_id,
+                "roleId": row.role_id,
+                "inviterUserId": row.inviter_id,
+                "inviteeUserId": row.invitee_id,
+                "status": row.status,
+                "expiresAt": api_datetime(row.expires_at),
+                "createdAt": api_datetime(row.created_at),
+                "respondedAt": api_datetime(row.responded_at),
             }
         )
 

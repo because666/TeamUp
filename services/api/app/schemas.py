@@ -8,6 +8,7 @@ RolePreference = Literal["LEADER", "MEMBER", "FLEXIBLE"]
 ProjectStatus = Literal["DRAFT", "PUBLISHED", "CLOSED"]
 RoleStatus = Literal["OPEN", "CLOSED"]
 MemberStatus = Literal["ACTIVE"]
+InvitationStatus = Literal["PENDING", "ACCEPTED", "REJECTED", "EXPIRED", "CANCELLED"]
 StructuredLabel = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
 
 
@@ -94,6 +95,24 @@ class BlockData(BaseModel):
 class UnblockData(BaseModel):
     blockedUserId: str
     removed: bool
+
+
+class InvitationCreateRequest(BaseModel):
+    projectId: str = Field(min_length=1, max_length=64)
+    roleId: str = Field(min_length=1, max_length=64)
+    inviteeUserId: str = Field(min_length=1, max_length=64)
+
+
+class InvitationData(BaseModel):
+    id: str
+    projectId: str
+    roleId: str
+    inviterUserId: str
+    inviteeUserId: str
+    status: InvitationStatus
+    expiresAt: datetime
+    createdAt: datetime
+    respondedAt: datetime | None = None
 
 
 class LoginRequest(BaseModel):
@@ -224,6 +243,11 @@ class ProjectMemberData(BaseModel):
     userId: str
     status: MemberStatus = "ACTIVE"
     joinedAt: datetime
+
+
+class InvitationAcceptData(BaseModel):
+    invitation: InvitationData
+    member: ProjectMemberData
 
 
 class ProjectPayload(BaseModel):

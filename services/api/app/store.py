@@ -8,6 +8,8 @@ from uuid import uuid4
 from .errors import ServiceError
 from .schemas import (
     BlockData,
+    InvitationAcceptData,
+    InvitationData,
     MatchPreferencesData,
     MatchPreferencesPayload,
     ProfileData,
@@ -32,6 +34,11 @@ class Store(Protocol):
     def create_block(self, blocker_id: str, blocked_id: str) -> BlockData: ...
     def remove_block(self, blocker_id: str, blocked_id: str) -> bool: ...
     def users_blocked(self, first_user_id: str, second_user_id: str) -> bool: ...
+    def create_invitation(
+        self, inviter_id: str, project_id: str, role_id: str, invitee_id: str
+    ) -> InvitationData: ...
+    def accept_invitation(self, invitee_id: str, invitation_id: str) -> InvitationAcceptData: ...
+    def reject_invitation(self, invitee_id: str, invitation_id: str) -> InvitationData: ...
     def get_profile(self, user_id: str) -> ProfileData | None: ...
     def save_profile(self, user_id: str, payload: ProfilePayload, version: int | None) -> ProfileData: ...
     def get_match_preferences(self, user_id: str) -> MatchPreferencesData | None: ...
@@ -57,6 +64,7 @@ class MemoryStore:
         self.users_by_subject: dict[str, str] = {}
         self.sessions: dict[str, tuple[str, datetime]] = {}
         self.blocks: dict[tuple[str, str], BlockData] = {}
+        self.invitations: dict[str, InvitationData] = {}
         self.profiles: dict[str, ProfileData] = {}
         self.match_preferences: dict[str, MatchPreferencesData] = {}
         self.projects: dict[str, ProjectData] = {}
@@ -108,6 +116,93 @@ class MemoryStore:
                 second_user_id,
                 first_user_id,
             ) in self.blocks
+
+    def create_invitation(
+        self, inviter_id: str, project_id: str, role_id: str, invitee_id: str
+    ) -> InvitationData:
+        with self._lock:
+            project = self.projects.get(project_id)
+            self._require_owner(project, inviter_id)
+            if inviter_id == invitee_id:
+                raise ServiceError("CANNOT_INVITE_SELF", "不能邀请自己加入项目。", 422)
+            if project.status != "PUBLISHED":
+                raise ServiceError("PROJECT_NOT_MATCHABLE", "项目当前状态不允许创建邀请。", 409)
+            if invitee_id not in self.users_by_subject.values():
+                raise ServiceError("RESOURCE_NOT_FOUND", "用户不存在或不可见。", 404)
+            if self.users_blocked(inviter_id, invitee_id):
+                raise ServiceError("USER_BLOCKED", "当前用户关系不允许创建邀请。", 409)
+            role = next((item for item in project.roles if item.id == role_id), None)
+            if role is None:
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目或岗位不存在。", 404)
+            if role.status != "OPEN":
+                raise ServiceError("ROLE_NOT_OPEN", "岗位当前不接受邀请。", 409)
+            if any(
+                member.projectId == project_id and member.userId == invitee_id and member.status == "ACTIVE"
+                for member in self.project_members.values()
+            ):
+                raise ServiceError("MEMBER_ALREADY_EXISTS", "用户已经是该项目成员。", 409)
+            if role.filledCount >= role.headcount:
+                raise ServiceError("ROLE_FULL", "岗位容量已满。", 409)
+
+            timestamp = now_utc()
+            for invitation_id, invitation in list(self.invitations.items()):
+                if (
+                    invitation.projectId == project_id
+                    and invitation.roleId == role_id
+                    and invitation.inviteeUserId == invitee_id
+                    and invitation.status == "PENDING"
+                ):
+                    if invitation.expiresAt > timestamp:
+                        return deepcopy(invitation)
+                    self.invitations[invitation_id] = invitation.model_copy(
+                        update={"status": "EXPIRED", "respondedAt": timestamp}
+                    )
+
+            invitation = InvitationData(
+                id=f"inv_{uuid4().hex}",
+                projectId=project_id,
+                roleId=role_id,
+                inviterUserId=inviter_id,
+                inviteeUserId=invitee_id,
+                status="PENDING",
+                expiresAt=timestamp + timedelta(days=7),
+                createdAt=timestamp,
+            )
+            self.invitations[invitation.id] = invitation
+            return deepcopy(invitation)
+
+    def accept_invitation(self, invitee_id: str, invitation_id: str) -> InvitationAcceptData:
+        with self._lock:
+            invitation = self._invitation_for_invitee(invitation_id, invitee_id)
+            if invitation.status == "ACCEPTED":
+                member = next(
+                    (
+                        item
+                        for item in self.project_members.values()
+                        if item.projectId == invitation.projectId and item.userId == invitee_id
+                    ),
+                    None,
+                )
+                if member is None:
+                    raise ServiceError("INTERNAL_ERROR", "邀请成员状态不一致。", 500)
+                return InvitationAcceptData(invitation=deepcopy(invitation), member=deepcopy(member))
+            if invitation.status != "PENDING" or invitation.expiresAt <= now_utc():
+                raise ServiceError("INVITATION_NOT_ACTIONABLE", "邀请已处理、过期或不可接受。", 409)
+            member = self.add_project_member(invitation.projectId, invitation.roleId, invitee_id)
+            accepted = invitation.model_copy(update={"status": "ACCEPTED", "respondedAt": now_utc()})
+            self.invitations[invitation_id] = accepted
+            return InvitationAcceptData(invitation=deepcopy(accepted), member=member)
+
+    def reject_invitation(self, invitee_id: str, invitation_id: str) -> InvitationData:
+        with self._lock:
+            invitation = self._invitation_for_invitee(invitation_id, invitee_id)
+            if invitation.status == "REJECTED":
+                return deepcopy(invitation)
+            if invitation.status != "PENDING" or invitation.expiresAt <= now_utc():
+                raise ServiceError("INVITATION_NOT_ACTIONABLE", "邀请已处理、过期或不可拒绝。", 409)
+            rejected = invitation.model_copy(update={"status": "REJECTED", "respondedAt": now_utc()})
+            self.invitations[invitation_id] = rejected
+            return deepcopy(rejected)
 
     def get_profile(self, user_id: str) -> ProfileData | None:
         with self._lock:
@@ -343,6 +438,12 @@ class MemoryStore:
             raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可见。", 404)
         if project.ownerId != user_id:
             raise ServiceError("FORBIDDEN", "你没有权限操作该项目。", 403)
+
+    def _invitation_for_invitee(self, invitation_id: str, invitee_id: str) -> InvitationData:
+        invitation = self.invitations.get(invitation_id)
+        if invitation is None or invitation.inviteeUserId != invitee_id:
+            raise ServiceError("RESOURCE_NOT_FOUND", "邀请不存在或不可见。", 404)
+        return invitation
 
     @staticmethod
     def _role_data(role: RolePayload, role_id: str, existing: RoleData | None = None) -> dict:

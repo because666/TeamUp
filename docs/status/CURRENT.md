@@ -37,6 +37,7 @@
 | TUP-20260812-match-preferences | 角色 B | 匹配偏好与岗位匹配字段 | Ready for Review | `role-b/feature/TUP-20260812-match-preferences` | [任务记录](tasks/TUP-20260812-match-preferences.md) |
 | TUP-20260812-project-members | 角色 B | 项目成员与岗位容量 | Ready for Review | `role-b/feature/TUP-20260812-project-members` | [任务记录](tasks/TUP-20260812-project-members.md) |
 | TUP-20260812-user-blocks | 角色 B | 用户拉黑与安全过滤 | Ready for Review | `role-b/feature/TUP-20260812-user-blocks` | [任务记录](tasks/TUP-20260812-user-blocks.md) |
+| TUP-20260812-project-invitations | 角色 B | 项目岗位邀请与接受事务 | Ready for Review | `role-b/feature/TUP-20260812-project-invitations` | [任务记录](tasks/TUP-20260812-project-invitations.md) |
 
 角色 A 的产品基础任务可以与角色 B 的技术基线评审并行；双方不得修改对方的任务文件或高冲突契约。
 

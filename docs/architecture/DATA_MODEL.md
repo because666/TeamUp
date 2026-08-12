@@ -7,7 +7,7 @@
 
 ## 基础实现状态
 
-首个 FastAPI 切片保留 local/test 内存适配器，并按 [ADR-0004](../decisions/ADR-0004-mysql-data-access.md) 实现了 MySQL 8 持久化适配器。匹配偏好、项目成员和用户拉黑分别通过第二、三、四版堆叠迁移实现。合入 `main` 仍需角色 A 评审。
+首个 FastAPI 切片保留 local/test 内存适配器，并按 [ADR-0004](../decisions/ADR-0004-mysql-data-access.md) 实现了 MySQL 8 持久化适配器。匹配偏好、项目成员、用户拉黑和岗位邀请分别通过第二至第五版堆叠迁移实现。合入 `main` 仍需角色 A 评审。
 
 首批已实现物理表：
 
@@ -28,6 +28,7 @@
 | `project_role_availability_slots` | 有序岗位必需时间段 | `(role_id, position)` 主键、范围检查 |
 | `project_members` | 项目有效成员 | 项目/用户唯一、项目/岗位复合外键、状态检查和容量索引 |
 | `blocks` | 用户单向拉黑关系 | `(blocker_id, blocked_id)` 主键、禁止自己拉黑和反向查询索引 |
+| `invitations` | 项目岗位邀请与状态机 | 项目/岗位复合外键、待处理唯一键、用户外键、状态/自邀检查和查询索引 |
 
 数据库时间以 UTC 秒精度写入，API 输出恢复为带 UTC 时区的时间。原始平台 token、微信 `session_key`、AppSecret 和数据库连接串不得进入业务表。
 
@@ -144,7 +145,9 @@ RecommendationImpression 1--N RecommendationOutcome
 
 `PENDING -> ACCEPTED | REJECTED | EXPIRED | CANCELLED`
 
-只有 `PENDING` 可接受或拒绝。接受时必须原子创建成员关系并更新岗位容量。
+只有 `PENDING` 可首次接受或拒绝；重复接受 `ACCEPTED` 和重复拒绝 `REJECTED` 返回原确定结果。接受时必须原子创建成员关系并更新邀请状态，成员容量由有效成员计数导出。
+
+第五版实现使用 `pending_key = project_id:role_id:invitee_id` 保证同一组合最多一条 `PENDING` 邀请；进入终态时清空该键，允许后续重新邀请。`expires_at`、`created_at` 和 `responded_at` 使用 UTC；首版有效期为 7 天，该时长仍需角色 A 评审。过期邀请在读取/处理时判定，当前不依赖定时任务。
 
 ### User
 
