@@ -7,7 +7,7 @@
 
 ## 基础实现状态
 
-首个 FastAPI 切片保留 local/test 内存适配器，并按 [ADR-0004](../decisions/ADR-0004-mysql-data-access.md) 实现了 MySQL 8 持久化适配器。初始 Alembic 迁移已在 MySQL 8.4.11 验证 upgrade、downgrade 和再次 upgrade。任务分支 `role-b/feature/TUP-20260812-match-preferences` 新增第二版迁移；堆叠分支 `role-b/feature/TUP-20260812-project-members` 新增第三版成员迁移。合入 `main` 仍需角色 A 评审。
+首个 FastAPI 切片保留 local/test 内存适配器，并按 [ADR-0004](../decisions/ADR-0004-mysql-data-access.md) 实现了 MySQL 8 持久化适配器。匹配偏好、项目成员和用户拉黑分别通过第二、三、四版堆叠迁移实现。合入 `main` 仍需角色 A 评审。
 
 首批已实现物理表：
 
@@ -27,6 +27,7 @@
 | `project_collaboration_scenarios` | 有序项目协作场景 | `(project_id, position)` 主键、项目/场景唯一 |
 | `project_role_availability_slots` | 有序岗位必需时间段 | `(role_id, position)` 主键、范围检查 |
 | `project_members` | 项目有效成员 | 项目/用户唯一、项目/岗位复合外键、状态检查和容量索引 |
+| `blocks` | 用户单向拉黑关系 | `(blocker_id, blocked_id)` 主键、禁止自己拉黑和反向查询索引 |
 
 数据库时间以 UTC 秒精度写入，API 输出恢复为带 UTC 时区的时间。原始平台 token、微信 `session_key`、AppSecret 和数据库连接串不得进入业务表。
 
@@ -48,7 +49,7 @@
 | `experiences` | `id`, `user_id`, `type`, `title`, `direction_code`, `description`, `verification_status`, `visibility`, `started_at`, `ended_at` | 自述与认证分开；AI 不可写 `VERIFIED`；仅公开记录参与他人匹配 |
 | `experience_skills` | `experience_id`, `skill_name`, `position` | 使用同一版本化技能词表；不从自由文本自动补标签 |
 | `project_members`（已实现） | `id`, `project_id`, `user_id`, `role_id`, `status`, `joined_at` | `(project_id, user_id)` 唯一；`(project_id, role_id)` 复合 FK 保证岗位属于项目；P0 仅 `ACTIVE`；容量计算只统计有效成员 |
-| `blocks` | `blocker_id`, `blocked_id`, `created_at` | 组合唯一，不允许自己拉黑自己；匹配过滤双向查询但不暴露原因 |
+| `blocks`（已实现） | `blocker_id`, `blocked_id`, `created_at` | 组合主键唯一，两个用户 FK，数据库禁止自己拉黑；业务双向查询但不暴露方向或原因 |
 
 方向、技能和经历的标准词表版本必须随匹配快照记录。学校层级、性别、微信身份、联系方式、私信和举报数据不进入这些结构化输入。
 

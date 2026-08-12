@@ -64,6 +64,7 @@
 - [匹配 API/数据契约角色 A 评审](status/reviews/TUP-20260811-match-api-data-contract-review.md)：角色 A 对岗位粒度、匹配偏好、分页、曝光和兼容迁移的决策入口。
 - [匹配偏好与岗位约束角色 A 评审](status/reviews/TUP-20260812-match-preferences-review.md)：角色 A 对首批匹配输入实现、旧前端兼容和迁移默认值的验收入口。
 - [项目成员与岗位容量角色 A 评审](status/reviews/TUP-20260812-project-members-review.md)：角色 A 对容量展示、成员列表权限和邀请前置边界的验收入口。
+- [用户拉黑与安全过滤角色 A 评审](status/reviews/TUP-20260812-user-blocks-review.md)：角色 A 对拉黑幂等、隐私反馈和跨模块阻断边界的验收入口。
 - [任务模板](status/templates/TASK_TEMPLATE.md)、[交接模板](status/templates/HANDOFF_TEMPLATE.md) 和 [模型发布模板](status/templates/MODEL_RELEASE_TEMPLATE.md)。
 
 ## 历史来源

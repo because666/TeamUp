@@ -82,6 +82,20 @@ class LogoutData(BaseModel):
     loggedOut: bool
 
 
+class BlockRequest(BaseModel):
+    blockedUserId: str = Field(min_length=1, max_length=64)
+
+
+class BlockData(BaseModel):
+    blockedUserId: str
+    createdAt: datetime
+
+
+class UnblockData(BaseModel):
+    blockedUserId: str
+    removed: bool
+
+
 class LoginRequest(BaseModel):
     code: str = Field(min_length=1, max_length=512)
     consentAccepted: bool

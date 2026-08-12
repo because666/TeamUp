@@ -212,3 +212,28 @@ def test_mysql_concurrent_members_cannot_overfill_role() -> None:
         assert refreshed.roles[0].remainingCount == 0
     finally:
         engine.dispose()
+
+
+def test_mysql_block_persistence_and_member_blocking() -> None:
+    assert MYSQL_URL is not None
+    engine = create_engine(MYSQL_URL, pool_pre_ping=True)
+    factory = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    store = SqlAlchemyStore(factory, engine)
+    suffix = uuid4().hex
+    owner_id, _, _ = store.login(f"wechat:integration:block-owner:{suffix}")
+    member_id, _, _ = store.login(f"wechat:integration:block-member:{suffix}")
+    try:
+        block = store.create_block(owner_id, member_id)
+        recreated = SqlAlchemyStore(factory, engine)
+        assert recreated.users_blocked(owner_id, member_id) is True
+        assert recreated.create_block(owner_id, member_id) == block
+        draft = recreated.create_project(owner_id, project_payload())
+        published = recreated.publish_project(owner_id, draft.id, draft.version)
+        with pytest.raises(ServiceError) as captured:
+            recreated.add_project_member(published.id, published.roles[0].id, member_id)
+        assert captured.value.code == "USER_BLOCKED"
+        assert recreated.remove_block(owner_id, member_id) is True
+        assert recreated.users_blocked(owner_id, member_id) is False
+        assert recreated.add_project_member(published.id, published.roles[0].id, member_id).userId == member_id
+    finally:
+        engine.dispose()

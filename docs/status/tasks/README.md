@@ -27,6 +27,7 @@
 - [TUP-20260811-match-api-data-contract](TUP-20260811-match-api-data-contract.md)
 - [TUP-20260812-match-preferences](TUP-20260812-match-preferences.md)
 - [TUP-20260812-project-members](TUP-20260812-project-members.md)
+- [TUP-20260812-user-blocks](TUP-20260812-user-blocks.md)
 
 跨角色评审：
 
@@ -39,3 +40,4 @@
 - [TUP-20260811-match-api-data-contract-review](../reviews/TUP-20260811-match-api-data-contract-review.md)
 - [TUP-20260812-match-preferences-review](../reviews/TUP-20260812-match-preferences-review.md)
 - [TUP-20260812-project-members-review](../reviews/TUP-20260812-project-members-review.md)
+- [TUP-20260812-user-blocks-review](../reviews/TUP-20260812-user-blocks-review.md)

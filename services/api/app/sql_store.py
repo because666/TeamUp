@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from .db_models import (
+    BlockRow,
     MatchPreferenceAvailabilitySlotRow,
     MatchPreferenceDirectionRow,
     MatchPreferenceRow,
@@ -27,6 +28,7 @@ from .db_models import (
 )
 from .errors import ServiceError
 from .schemas import (
+    BlockData,
     MatchPreferencesData,
     MatchPreferencesPayload,
     ProfileData,
@@ -127,6 +129,40 @@ class SqlAlchemyStore:
             row = session.scalar(select(SessionRow).where(SessionRow.token_digest == token_digest(token)).with_for_update())
             if row is not None and row.revoked_at is None:
                 row.revoked_at = db_now()
+
+    def create_block(self, blocker_id: str, blocked_id: str) -> BlockData:
+        if blocker_id == blocked_id:
+            raise ServiceError("CANNOT_BLOCK_SELF", "不能拉黑自己。", 422)
+        first_id, second_id = sorted((blocker_id, blocked_id))
+        with self._session_factory.begin() as session:
+            users = list(
+                session.scalars(
+                    select(UserRow)
+                    .where(UserRow.id.in_([first_id, second_id]), UserRow.status == "ACTIVE")
+                    .order_by(UserRow.id)
+                    .with_for_update()
+                )
+            )
+            if len(users) != 2:
+                raise ServiceError("RESOURCE_NOT_FOUND", "用户不存在或不可见。", 404)
+            row = session.get(BlockRow, (blocker_id, blocked_id))
+            if row is None:
+                row = BlockRow(blocker_id=blocker_id, blocked_id=blocked_id, created_at=db_now())
+                session.add(row)
+                session.flush()
+            return BlockData(blockedUserId=blocked_id, createdAt=api_datetime(row.created_at))
+
+    def remove_block(self, blocker_id: str, blocked_id: str) -> bool:
+        with self._session_factory.begin() as session:
+            row = session.get(BlockRow, (blocker_id, blocked_id), with_for_update=True)
+            if row is None:
+                return False
+            session.delete(row)
+            return True
+
+    def users_blocked(self, first_user_id: str, second_user_id: str) -> bool:
+        with self._session_factory() as session:
+            return self._users_blocked(session, first_user_id, second_user_id)
 
     def get_profile(self, user_id: str) -> ProfileData | None:
         with self._session_factory() as session:
@@ -288,11 +324,17 @@ class SqlAlchemyStore:
                 raise ServiceError("RESOURCE_NOT_FOUND", "项目或岗位不存在。", 404)
             if project.status != "PUBLISHED":
                 raise ServiceError("PROJECT_NOT_MATCHABLE", "项目当前状态不允许新增成员。", 409)
-            user = session.scalar(
-                select(UserRow).where(UserRow.id == user_id, UserRow.status == "ACTIVE").with_for_update()
+            user_ids = sorted((project.owner_id, user_id))
+            users = list(
+                session.scalars(
+                    select(UserRow).where(UserRow.id.in_(user_ids)).order_by(UserRow.id).with_for_update()
+                )
             )
-            if user is None:
+            candidate = next((item for item in users if item.id == user_id and item.status == "ACTIVE"), None)
+            if candidate is None:
                 raise ServiceError("RESOURCE_NOT_FOUND", "用户不存在。", 404)
+            if self._users_blocked(session, project.owner_id, user_id):
+                raise ServiceError("USER_BLOCKED", "当前用户关系不允许新增成员。", 409)
             role = session.scalar(
                 select(ProjectRoleRow)
                 .where(ProjectRoleRow.id == role_id, ProjectRoleRow.project_id == project_id)
@@ -371,6 +413,20 @@ class SqlAlchemyStore:
     @staticmethod
     def _profile_query() -> Select[tuple[ProfileRow]]:
         return select(ProfileRow).options(selectinload(ProfileRow.skills), selectinload(ProfileRow.scenarios))
+
+    @staticmethod
+    def _users_blocked(session: Session, first_user_id: str, second_user_id: str) -> bool:
+        return (
+            session.scalar(
+                select(BlockRow.blocker_id).where(
+                    or_(
+                        (BlockRow.blocker_id == first_user_id) & (BlockRow.blocked_id == second_user_id),
+                        (BlockRow.blocker_id == second_user_id) & (BlockRow.blocked_id == first_user_id),
+                    )
+                )
+            )
+            is not None
+        )
 
     @staticmethod
     def _match_preferences_query() -> Select[tuple[MatchPreferenceRow]]:

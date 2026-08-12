@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from .errors import ServiceError
 from .schemas import (
+    BlockData,
     MatchPreferencesData,
     MatchPreferencesPayload,
     ProfileData,
@@ -28,6 +29,9 @@ class Store(Protocol):
     def login(self, subject: str) -> tuple[str, str, bool]: ...
     def user_for_token(self, token: str) -> str: ...
     def logout(self, token: str) -> None: ...
+    def create_block(self, blocker_id: str, blocked_id: str) -> BlockData: ...
+    def remove_block(self, blocker_id: str, blocked_id: str) -> bool: ...
+    def users_blocked(self, first_user_id: str, second_user_id: str) -> bool: ...
     def get_profile(self, user_id: str) -> ProfileData | None: ...
     def save_profile(self, user_id: str, payload: ProfilePayload, version: int | None) -> ProfileData: ...
     def get_match_preferences(self, user_id: str) -> MatchPreferencesData | None: ...
@@ -52,6 +56,7 @@ class MemoryStore:
         self._lock = RLock()
         self.users_by_subject: dict[str, str] = {}
         self.sessions: dict[str, tuple[str, datetime]] = {}
+        self.blocks: dict[tuple[str, str], BlockData] = {}
         self.profiles: dict[str, ProfileData] = {}
         self.match_preferences: dict[str, MatchPreferencesData] = {}
         self.projects: dict[str, ProjectData] = {}
@@ -78,6 +83,31 @@ class MemoryStore:
     def logout(self, token: str) -> None:
         with self._lock:
             self.sessions.pop(token, None)
+
+    def create_block(self, blocker_id: str, blocked_id: str) -> BlockData:
+        with self._lock:
+            if blocker_id == blocked_id:
+                raise ServiceError("CANNOT_BLOCK_SELF", "不能拉黑自己。", 422)
+            if blocked_id not in self.users_by_subject.values():
+                raise ServiceError("RESOURCE_NOT_FOUND", "用户不存在或不可见。", 404)
+            key = (blocker_id, blocked_id)
+            existing = self.blocks.get(key)
+            if existing is not None:
+                return deepcopy(existing)
+            block = BlockData(blockedUserId=blocked_id, createdAt=now_utc())
+            self.blocks[key] = block
+            return deepcopy(block)
+
+    def remove_block(self, blocker_id: str, blocked_id: str) -> bool:
+        with self._lock:
+            return self.blocks.pop((blocker_id, blocked_id), None) is not None
+
+    def users_blocked(self, first_user_id: str, second_user_id: str) -> bool:
+        with self._lock:
+            return (first_user_id, second_user_id) in self.blocks or (
+                second_user_id,
+                first_user_id,
+            ) in self.blocks
 
     def get_profile(self, user_id: str) -> ProfileData | None:
         with self._lock:
@@ -237,6 +267,8 @@ class MemoryStore:
                 raise ServiceError("PROJECT_NOT_MATCHABLE", "项目当前状态不允许新增成员。", 409)
             if user_id not in self.users_by_subject.values():
                 raise ServiceError("RESOURCE_NOT_FOUND", "用户不存在。", 404)
+            if self.users_blocked(project.ownerId, user_id):
+                raise ServiceError("USER_BLOCKED", "当前用户关系不允许新增成员。", 409)
             role = next((item for item in project.roles if item.id == role_id), None)
             if role is None:
                 raise ServiceError("RESOURCE_NOT_FOUND", "项目或岗位不存在。", 404)

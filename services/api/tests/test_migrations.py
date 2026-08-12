@@ -21,6 +21,7 @@ EXPECTED_TABLES = {
     "project_collaboration_scenarios",
     "project_role_availability_slots",
     "project_members",
+    "blocks",
 }
 
 

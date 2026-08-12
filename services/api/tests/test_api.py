@@ -231,3 +231,51 @@ def test_project_member_list_permissions_and_capacity() -> None:
     refreshed = client.get(f"/api/v1/projects/{project['id']}", headers=owner_headers).json()["data"]
     assert refreshed["roles"][0]["filledCount"] == 1
     assert refreshed["roles"][0]["remainingCount"] == 0
+
+
+def test_blocks_are_idempotent_private_and_remove_cleanly() -> None:
+    store = MemoryStore()
+    client = TestClient(make_app(Settings(environment="test", allow_local_login=True), store_override=store))
+    blocker_token = login(client, "blocker")
+    blocked_token = login(client, "blocked")
+    blocker_id = store.user_for_token(blocker_token)
+    blocked_id = store.user_for_token(blocked_token)
+    headers = {"Authorization": f"Bearer {blocker_token}"}
+
+    self_response = client.post("/api/v1/blocks", headers=headers, json={"blockedUserId": blocker_id})
+    assert self_response.status_code == 422
+    created = client.post("/api/v1/blocks", headers=headers, json={"blockedUserId": blocked_id})
+    assert created.status_code == 200
+    assert created.json()["data"]["blockedUserId"] == blocked_id
+    repeated = client.post("/api/v1/blocks", headers=headers, json={"blockedUserId": blocked_id})
+    assert repeated.status_code == 200
+    assert repeated.json()["data"] == created.json()["data"]
+    assert store.users_blocked(blocker_id, blocked_id) is True
+
+    removed = client.delete(f"/api/v1/blocks/{blocked_id}", headers=headers)
+    assert removed.status_code == 200
+    assert removed.json()["data"] == {"blockedUserId": blocked_id, "removed": True}
+    repeated_remove = client.delete(f"/api/v1/blocks/{blocked_id}", headers=headers)
+    assert repeated_remove.status_code == 200
+    assert repeated_remove.json()["data"]["removed"] is False
+    assert store.users_blocked(blocker_id, blocked_id) is False
+
+    assert client.post("/api/v1/blocks", headers=headers, json={"blockedUserId": "usr_missing"}).status_code == 404
+    assert client.post("/api/v1/blocks", json={"blockedUserId": blocked_id}).status_code == 401
+
+    schema = client.app.openapi()
+    assert "post" in schema["paths"]["/api/v1/blocks"]
+    assert "delete" in schema["paths"]["/api/v1/blocks/{blocked_user_id}"]
+
+
+def test_delete_block_cors_preflight() -> None:
+    client = make_client()
+    response = client.options(
+        "/api/v1/blocks/usr_target",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "DELETE",
+        },
+    )
+    assert response.status_code == 200
+    assert "DELETE" in response.headers["access-control-allow-methods"]

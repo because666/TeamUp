@@ -12,6 +12,8 @@ from .config import Settings, get_settings
 from .database import create_store
 from .errors import ServiceError, error_response
 from .schemas import (
+    BlockData,
+    BlockRequest,
     Envelope,
     HealthData,
     LoginRequest,
@@ -28,6 +30,7 @@ from .schemas import (
     ProjectPayload,
     ProjectUpdate,
     SessionData,
+    UnblockData,
 )
 from .store import Store
 from .wechat import WeChatCodeExchanger, WeChatLoginClient
@@ -69,13 +72,14 @@ def make_app(
             {"name": "profile"},
             {"name": "matching"},
             {"name": "projects"},
+            {"name": "safety"},
         ],
     )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=app_settings.cors_origin_list,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PUT", "PATCH", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
     )
 
@@ -138,6 +142,18 @@ def make_app(
         token = bearer_token(authorization)
         app_store.logout(token)
         return envelope(request, {"loggedOut": True})
+
+    @api.post("/blocks", tags=["safety"], response_model=Envelope[BlockData])
+    def create_block(payload: BlockRequest, request: Request, user_id: str = Depends(current_user)):
+        block = app_store.create_block(user_id, payload.blockedUserId)
+        return envelope(request, block.model_dump(mode="json"))
+
+    @api.delete("/blocks/{blocked_user_id}", tags=["safety"], response_model=Envelope[UnblockData])
+    def remove_block(blocked_user_id: str, request: Request, user_id: str = Depends(current_user)):
+        if not blocked_user_id or len(blocked_user_id) > 64:
+            raise ServiceError("VALIDATION_ERROR", "用户标识不符合接口要求。", 422)
+        removed = app_store.remove_block(user_id, blocked_user_id)
+        return envelope(request, {"blockedUserId": blocked_user_id, "removed": removed})
 
     @api.get("/me/profile", tags=["profile"], response_model=Envelope[ProfileData | None])
     def get_profile(request: Request, user_id: str = Depends(current_user)):

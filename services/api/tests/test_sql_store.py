@@ -291,3 +291,23 @@ def test_closed_role_rejects_new_member(sql_store) -> None:
         "ROLE_NOT_OPEN",
         lambda: store.add_project_member(published.id, published.roles[1].id, user_id),
     )
+
+
+def test_blocks_are_bidirectional_and_prevent_new_members(sql_store) -> None:
+    store, _, _ = sql_store
+    owner_id, _, _ = store.login("wechat:app-a:block-owner")
+    member_id, _, _ = store.login("wechat:app-a:block-member")
+    project = store.create_project(owner_id, project_payload("拉黑成员项目"))
+    published = store.publish_project(owner_id, project.id, project.version)
+    block = store.create_block(owner_id, member_id)
+    assert block.blockedUserId == member_id
+    assert store.users_blocked(owner_id, member_id) is True
+    assert store.users_blocked(member_id, owner_id) is True
+    assert_service_error(
+        "USER_BLOCKED",
+        lambda: store.add_project_member(published.id, published.roles[0].id, member_id),
+    )
+    assert store.remove_block(owner_id, member_id) is True
+    assert store.remove_block(owner_id, member_id) is False
+    assert store.users_blocked(owner_id, member_id) is False
+    assert store.add_project_member(published.id, published.roles[0].id, member_id).userId == member_id

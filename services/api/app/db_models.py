@@ -45,6 +45,19 @@ class SessionRow(Base):
     __table_args__ = (Index("ix_sessions_user_expires", "user_id", "expires_at"),)
 
 
+class BlockRow(Base):
+    __tablename__ = "blocks"
+
+    blocker_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    blocked_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index("ix_blocks_blocked_blocker", "blocked_id", "blocker_id"),
+        CheckConstraint("blocker_id <> blocked_id", name="ck_blocks_not_self"),
+    )
+
+
 class ProfileRow(Base):
     __tablename__ = "profiles"
 

@@ -9,7 +9,7 @@
 
 FastAPI 基础实现目前已覆盖 `/api/v1` 下的健康检查、微信真实/local 登录、退出、当前用户名片，以及项目创建、详情、更新、发布、关闭和公开列表。
 
-实现返回约定的 `data`/`meta`/`requestId` 信封和结构化错误，并已支持 local/test memory 与 MySQL 8 持久化。`match-v0.1` 纯规则引擎已实现。用户已明确授权按 [ADR-0005](../decisions/ADR-0005-matching-api-data-contract.md) 推荐方案实施首批匹配输入；`role-b/feature/TUP-20260812-match-preferences` 已实现偏好路由、项目字段和第二版迁移。堆叠分支 `role-b/feature/TUP-20260812-project-members` 已实现成员读取和岗位容量基础。上述契约仍为 Proposed，合入 `main` 前必须由角色 A 评审。
+实现返回约定的 `data`/`meta`/`requestId` 信封和结构化错误，并已支持 local/test memory 与 MySQL 8 持久化。`match-v0.1` 纯规则引擎已实现。用户已明确授权按 [ADR-0005](../decisions/ADR-0005-matching-api-data-contract.md) 推荐方案实施首批匹配输入；匹配偏好、成员容量和拉黑基础已在独立堆叠分支实现。上述契约仍为 Proposed，合入 `main` 前必须由角色 A 评审。
 
 ### 微信真实登录
 
@@ -219,6 +219,43 @@ Authorization: Bearer <token>
 - 响应不包含微信身份、联系方式、非公开名片或内部邀请信息；
 - 当前没有公共成员写接口。成员只能由后续 `API-TEAM-02` 接受邀请事务创建，禁止客户端直接添加成员；
 - 内部创建必须锁定项目和岗位，重新检查 `PUBLISHED`、岗位 `OPEN`、用户状态、唯一成员与容量；失败使用 `PROJECT_NOT_MATCHABLE`、`ROLE_NOT_OPEN`、`MEMBER_ALREADY_EXISTS` 或 `ROLE_FULL`。
+
+### 用户拉黑（Proposed，任务分支已实现）
+
+`API-SAFE-02`：
+
+```http
+POST /api/v1/blocks
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"blockedUserId": "usr_opaque_id"}
+```
+
+成功时返回当前用户创建的最小关系结果：
+
+```json
+{
+  "blockedUserId": "usr_opaque_id",
+  "createdAt": "2026-08-12T08:00:00Z"
+}
+```
+
+- `blockedUserId` 必须是存在且状态有效的用户，不允许等于当前用户；
+- 重复提交同一方向关系幂等返回原始 `createdAt`，不创建第二条记录；
+- 自己拉黑返回 `422 CANNOT_BLOCK_SELF`，目标不存在或不可见返回 `404 RESOURCE_NOT_FOUND`；
+- 响应不包含原因，也不说明目标是否已反向拉黑当前用户。
+
+`API-SAFE-03`：
+
+```http
+DELETE /api/v1/blocks/{blockedUserId}
+Authorization: Bearer <token>
+```
+
+响应为 `{"blockedUserId":"usr_opaque_id","removed":true}`；关系不存在时仍返回 `200` 和 `removed=false`。取消拉黑只删除当前用户创建的单向关系，不删除对方创建的关系，也不恢复历史邀请、消息或成员关系。
+
+服务端内部双向检查只要存在 `(A,B)` 或 `(B,A)` 任一关系就视为已阻断。当前分支已将该检查接入新成员创建；消息、邀请、发现和匹配模块实现时必须复用同一检查，不能根据客户端状态判断。
 
 ### ProjectSummary
 
