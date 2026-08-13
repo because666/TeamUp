@@ -7,13 +7,41 @@
 
 ## 基础实现状态
 
-FastAPI 基础实现目前已覆盖 `/api/v1` 下的健康检查、微信真实/local 登录、退出、当前用户名片，以及项目创建、详情、更新、发布、关闭和公开列表。
+FastAPI 基础实现目前已覆盖 `/api/v1` 下的健康检查、微信真实/local 登录、退出、当前用户名片和公开名片发现，以及项目创建、详情、更新、发布、关闭、公开筛选列表和当前用户项目列表。
 
-实现返回约定的 `data`/`meta`/`requestId` 信封和结构化错误，并已支持 local/test memory 与 MySQL 8 持久化。`match-v0.1` 纯规则引擎已实现。用户已明确授权按 [ADR-0005](../decisions/ADR-0005-matching-api-data-contract.md) 推荐方案实施首批匹配输入；匹配偏好、成员容量和拉黑基础已在独立堆叠分支实现。上述契约仍为 Proposed，合入 `main` 前必须由角色 A 评审。
+实现返回约定的 `data`/`meta`/`requestId` 信封和结构化错误，并已支持 local/test memory 与 MySQL 8 持久化。`match-v0.1` 纯规则引擎及其岗位级 `API-MATCH-01/02` 适配已在任务分支实现。用户已明确授权按 [ADR-0005](../decisions/ADR-0005-matching-api-data-contract.md) 推荐方案实施首批匹配输入；匹配偏好、成员容量和拉黑基础已在独立堆叠分支实现。上述契约仍为 Proposed，合入 `main` 前必须由角色 A 评审。
 
 ### 微信真实登录
 
 `POST /auth/wechat/login` 在服务端配置 `TEAMUP_WECHAT_APP_ID` 和 `TEAMUP_WECHAT_APP_SECRET` 后，会将一次性小程序 `code` 发送到微信 `jscode2session` 接口。服务端按 AppID 命名空间使用返回的 `openid` 做内部用户映射，并签发平台访问凭证；微信身份和 local 测试身份不得共享 subject 命名空间。`session_key` 不进入响应、日志或存储。微信无效 code 返回 `INVALID_LOGIN_CODE`，频率限制返回 `RATE_LIMITED`，外部服务不可用返回 `EXTERNAL_SERVICE_UNAVAILABLE`。配置缺失返回 `WECHAT_NOT_CONFIGURED`，其他微信校验失败返回 `WECHAT_LOGIN_FAILED`，生产或明确关闭替代登录时传入 `local:` code 返回 `LOCAL_LOGIN_DISABLED`。
+
+命中服务端限流时使用 HTTP `429`，错误码为 `RATE_LIMITED`，并通过 `Retry-After` 响应头返回建议等待秒数。
+
+### 发现与公开名片（Proposed，任务分支实现）
+
+`API-DISC-01`：
+
+```http
+GET /api/v1/projects?status=PUBLISHED&direction=AI&competition=互联网%2B&stage=IDEA&skill=Python&limit=20&cursor=<opaque>
+Authorization: Bearer <token>
+```
+
+仅返回 `PUBLISHED` 项目。`direction`、`competition`、`stage` 和 `skill` 均为可选精确筛选，结果按最新发布时间和项目 ID 稳定倒序分页；`status` 当前固定为 `PUBLISHED`，关闭项目不进入项目大厅。
+
+`API-DISC-02`：
+
+```http
+GET /api/v1/profiles?skill=Python&direction=AI&collaborationRole=FLEXIBLE&minHoursPerWeek=6&maxHoursPerWeek=10&limit=20&cursor=<opaque>
+Authorization: Bearer <token>
+```
+
+仅返回账号 `ACTIVE`、名片明确 `visibility=true` 的用户。`direction` 匹配用户独立 `match-preferences.desiredDirections`，不从专业、简介或协作场景推断；`skill`、合作角色和投入时间为可选筛选。响应只包含公开名片字段和不可变 `id`，不包含 `version`。
+
+`GET /api/v1/profiles/{profileId}` 返回同一公开名片 DTO。当前用户、未公开、非活跃账号或双方任一方向拉黑均返回 `404 RESOURCE_NOT_FOUND`，避免泄露资源存在性。
+
+`GET /api/v1/me/projects?status=DRAFT|PUBLISHED|CLOSED&limit=20&cursor=<opaque>` 只返回当前用户拥有的项目，按更新时间和项目 ID 稳定倒序分页；省略 `status` 时返回该用户全部项目。
+
+本切片要求先认证；Guest 是否可浏览公开摘要仍由 `IA-GAP-01` 决定，未确认前不开放匿名访问。
 
 ## 1. 适用范围
 
@@ -107,6 +135,7 @@ FastAPI 基础实现目前已覆盖 `/api/v1` 下的健康检查、微信真实/
 | API-PROJ-03 | PATCH | `/projects/{projectId}` | 更新自己的项目 | PROJ-001 |
 | API-PROJ-04 | POST | `/projects/{projectId}/publish` | 发布项目 | PROJ-001 |
 | API-PROJ-05 | POST | `/projects/{projectId}/close` | 关闭项目 | PROJ-001 |
+| API-PROJ-06 | GET | `/me/projects` | 当前用户项目列表 | GAP-PROJ-03 |
 | API-PROJ-MEMBER-01 | GET | `/projects/{projectId}/members` | owner/有效成员读取项目成员 | PROJ-001 / TEAM-001 |
 | API-DISC-01 | GET | `/projects` | 项目大厅筛选 | DISC-001 |
 | API-DISC-02 | GET | `/profiles` | 人才大厅筛选 | DISC-002 |
@@ -461,6 +490,8 @@ Authorization: Bearer <token>
 
 `engineType` 可为 `RULE` 或 `ML_RANKER`。自然语言解释可以由客户端模板或生成式 AI 生成，但 `score`、`confidence`、`informationSufficient`、`engineVersion`、`modelVersion` 和 `factors` 只能来自匹配服务。内部 `rankingScore` 只用于排序，不返回客户端。
 
+当前任务分支的实现说明：`API-MATCH-01/02` 使用 `RULE/match-v0.1` 返回上述 DTO。`recommendationRequestId` 和 cursor 的分页快照仍由服务端进程内保存、默认有效 24 小时，服务重启后 cursor 失效；首次生成推荐时会将请求和候选索引写入 `recommendation_requests`/`recommendation_candidates`，用于曝光归属校验。`API-MATCH-03` 将曝光事件持久化到 `recommendation_impressions`，但不改变当前进程内分页架构，也不代表 ADR-0005 的完整持久化快照方案已 Accepted。
+
 ### 匹配列表请求与响应（Proposed）
 
 `API-MATCH-01`：
@@ -528,7 +559,17 @@ Authorization: Bearer <token>
 - 不属于候选快照返回 `422 INVALID_RECOMMENDATION_TARGET`；请求过期返回 `410 RECOMMENDATION_EXPIRED`；
 - `occurredAt` 仅作客户端观察时间，服务端另存接收时间并限制可接受时钟偏差。
 
+`API-MATCH-03` 的服务端时间窗口为当前时间前 24 小时至后 5 分钟；无时区时间戳、越界时间戳和跨用户请求均拒绝。请求、候选与曝光表已提供向前迁移，保留周期仍由隐私/模型数据政策决定。
+
 详情、沟通、邀请和组队结果由对应业务接口在服务端关联记录，不接受客户端直接声明“成功组队”。
+
+### 举报提交（Proposed，任务分支已实现）
+
+`POST /api/v1/reports` 接受 `targetType`（`USER|PROJECT|MESSAGE`）、`targetId`、受控 `reason`（`SPAM|HARASSMENT|FRAUD|INAPPROPRIATE_CONTENT|OTHER`）和可选 `description`。服务端从 bearer 会话确定 reporter。自己、不可见用户/项目以及 reporter 无权访问的会话消息统一返回 `404 RESOURCE_NOT_FOUND`；用户也不能举报自己发送的消息。初始状态为 `PENDING`，同一 reporter、目标和原因的待处理举报幂等返回原记录。管理员审核、下架、申诉和审计接口不在本切片范围。
+
+### 注销申请（Proposed，任务分支已实现）
+
+`POST /api/v1/account/deletion-requests` 仅使用当前 bearer 会话确定用户，不接收客户端用户 ID。首次成功创建 `PENDING` 申请后，账号进入 `DELETION_PENDING` 并立即撤销该用户全部平台会话；该账号不能重新登录或访问受保护接口。并发或重复申请返回同一待处理申请。该接口不直接物理删除或匿名化数据；等待期、取消申请、最终处理和各类数据保留策略仍由 `GAP-BE-PRIV-01` 决定。
 
 ## 8. 兼容性规则
 

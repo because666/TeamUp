@@ -45,6 +45,51 @@ class SessionRow(Base):
     __table_args__ = (Index("ix_sessions_user_expires", "user_id", "expires_at"),)
 
 
+class AccountDeletionRequestRow(Base):
+    __tablename__ = "account_deletion_requests"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    pending_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=True, unique=True
+    )
+    requested_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_account_deletion_requests_user_requested", "user_id", "requested_at"),
+        CheckConstraint("status IN ('PENDING','CANCELLED','COMPLETED')", name="ck_account_deletion_requests_status"),
+        CheckConstraint(
+            "(status = 'PENDING' AND pending_user_id = user_id) OR "
+            "(status <> 'PENDING' AND pending_user_id IS NULL)",
+            name="ck_account_deletion_requests_pending_user",
+        ),
+    )
+
+
+class AuditEventRow(Base):
+    __tablename__ = "audit_events"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    actor_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    resource_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    resource_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index("ix_audit_events_actor_created", "actor_user_id", "created_at"),
+        Index("ix_audit_events_resource_created", "resource_type", "resource_id", "created_at"),
+        Index("ix_audit_events_request", "request_id"),
+        CheckConstraint("outcome IN ('SUCCESS','FAILURE')", name="ck_audit_events_outcome"),
+    )
+
+
 class BlockRow(Base):
     __tablename__ = "blocks"
 
@@ -361,4 +406,83 @@ class MessageRow(Base):
         Index("ix_messages_conversation_created", "conversation_id", "created_at", "id"),
         CheckConstraint("type IN ('TEXT')", name="ck_messages_type"),
         CheckConstraint("status IN ('SENT')", name="ck_messages_status"),
+    )
+
+
+class RecommendationRequestRow(Base):
+    __tablename__ = "recommendation_requests"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    viewer_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    context: Mapped[str] = mapped_column(String(255), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (Index("ix_recommendation_requests_viewer_created", "viewer_user_id", "created_at"),)
+
+
+class RecommendationCandidateRow(Base):
+    __tablename__ = "recommendation_candidates"
+
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    request_id: Mapped[str] = mapped_column(ForeignKey("recommendation_requests.id", ondelete="CASCADE"), nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("request_id", "rank", name="uq_recommendation_candidates_request_rank"),
+        UniqueConstraint("request_id", "target_type", "target_id", name="uq_recommendation_candidates_request_target"),
+        Index("ix_recommendation_candidates_request_rank", "request_id", "rank"),
+    )
+
+
+class RecommendationImpressionRow(Base):
+    __tablename__ = "recommendation_impressions"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    request_id: Mapped[str] = mapped_column(ForeignKey("recommendation_requests.id", ondelete="CASCADE"), nullable=False)
+    viewer_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    client_occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "request_id", "viewer_user_id", "target_type", "target_id",
+            name="uq_recommendation_impressions_request_viewer_target",
+        ),
+        Index("ix_recommendation_impressions_viewer_received", "viewer_user_id", "received_at"),
+    )
+
+
+class ReportRow(Base):
+    __tablename__ = "reports"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    reporter_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    pending_key: Mapped[str | None] = mapped_column(String(192), nullable=True, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    __table_args__ = (
+        Index("ix_reports_status_created", "status", "created_at"),
+        Index("ix_reports_target", "target_type", "target_id"),
+        CheckConstraint("target_type IN ('USER','PROJECT','MESSAGE')", name="ck_reports_target_type"),
+        CheckConstraint(
+            "reason IN ('SPAM','HARASSMENT','FRAUD','INAPPROPRIATE_CONTENT','OTHER')",
+            name="ck_reports_reason",
+        ),
+        CheckConstraint("status IN ('PENDING','REVIEWED','DISMISSED','ACTIONED')", name="ck_reports_status"),
+        CheckConstraint(
+            "(status = 'PENDING' AND pending_key IS NOT NULL) OR "
+            "(status <> 'PENDING' AND pending_key IS NULL)",
+            name="ck_reports_pending_key",
+        ),
     )

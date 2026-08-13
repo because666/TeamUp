@@ -61,9 +61,9 @@
 
 | 表 | Proposed 关键字段 | 约束 |
 | --- | --- | --- |
-| `recommendation_requests` | `id`, `viewer_user_id`, `direction`, `context_project_id`, `context_role_id`, `engine_type`, `engine_version`, `model_version`, `feature_schema_version`, `expires_at`, `created_at` | ID 使用高熵 opaque 随机值；`ROLE_TO_USER` 必须绑定 owner 可管理的项目岗位；请求有候选上限和 TTL |
-| `recommendation_candidates` | `id`, `request_id`, `rank`, `target_type`, `target_user_id`, `target_role_id`, `score`, `confidence`, `ranking_score`, `factors_json`, `missing_information_json`, `created_at` | `(request_id, rank)` 唯一；`PROFILE` 只填 user FK，`PROJECT_ROLE` 只填 role FK；只保存允许解释因素，不保存敏感原始特征 |
-| `recommendation_impressions` | `id`, `request_id`, `candidate_id`, `viewer_user_id`, `position`, `client_occurred_at`, `received_at` | `(request_id, viewer_user_id, candidate_id)` 唯一；candidate 必须属于 request；不同 position 的重复提交冲突 |
+| `recommendation_requests`（任务分支已实现） | `id`, `viewer_user_id`, `context`, `expires_at`, `created_at` | ID 使用高熵 opaque 随机值；请求绑定 viewer 和上下文，并带 TTL |
+| `recommendation_candidates`（任务分支已实现） | `id`, `request_id`, `rank`, `target_type`, `target_id` | `(request_id, rank)` 和 `(request_id, target_type, target_id)` 唯一；只保存候选索引，不保存敏感原始特征 |
+| `recommendation_impressions`（任务分支已实现） | `id`, `request_id`, `viewer_user_id`, `target_type`, `target_id`, `position`, `client_occurred_at`, `received_at` | `(request_id, viewer_user_id, target_type, target_id)` 唯一；candidate 必须属于 request；不同 position 的重复提交冲突 |
 
 `factors_json` 是不可变快照，不作为用户资料或当前匹配真值；其 schema 由 `feature_schema_version` 校验。客户端 cursor 不单独成为业务真值，可使用服务端签名的 opaque token 绑定 request、viewer 和下一 rank。
 
@@ -94,6 +94,7 @@
 | 实体 | 关键字段 | 关键约束 |
 | --- | --- | --- |
 | User | id, wechat_subject, status, consent_version, created_at | `wechat_subject` 唯一且不可公开 |
+| AccountDeletionRequest（任务分支已实现） | id, user_id, status, pending_user_id, requested_at, resolved_at | `pending_user_id` 保证每个用户最多一条 `PENDING` 申请；申请时账号原子进入 `DELETION_PENDING` 并撤销会话 |
 | Profile | user_id, nickname, school, major, grade, bio, visibility, version | 一个用户一个当前名片 |
 | Skill | id, normalized_name, category, status | 规范名唯一，自定义标签需治理 |
 | ProfileSkill | profile_id, skill_id, level, source | 组合唯一 |
@@ -112,8 +113,8 @@
 | Message | id, conversation_id, sender_id, type, content, status, created_at | 发送者必须是会话参与者 |
 | Invitation | id, project_id, role_id, inviter_id, invitee_id, status, expires_at | 接受操作幂等 |
 | Block | blocker_id, blocked_id, created_at | 组合唯一，不允许自己拉黑自己 |
-| Report | id, reporter_id, target_type, target_id, reason, status | 处理动作需审计 |
-| AuditEvent | id, actor_id, action, resource_type, resource_id, request_id, created_at | 不存密钥和完整敏感正文 |
+| Report（任务分支已实现提交记录） | id, reporter_id, target_type, target_id, reason, description, status, pending_key, created_at | 目标类型/原因/状态受约束；`pending_key` 保证同一 reporter、目标、原因最多一条 `PENDING`；正文仅供治理，不进入推荐或日志 |
+| AuditEvent（任务分支已实现最小写入） | id, actor_user_id, action, resource_type, resource_id, request_id, outcome, created_at | 举报首次提交和注销首次申请同事务写入；不存密钥、举报说明和完整敏感正文 |
 
 ## 3. 关系概览
 

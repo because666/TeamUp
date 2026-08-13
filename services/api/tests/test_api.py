@@ -1,12 +1,46 @@
+from datetime import UTC, datetime
+
+import logging
+
 from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import make_app
+from app.rate_limit import InMemoryRateLimiter, RateLimitRule
 from app.store import MemoryStore
 
 
-def make_client() -> TestClient:
-    return TestClient(make_app(Settings(environment="test", allow_local_login=True)))
+def make_client(rate_limiter: InMemoryRateLimiter | None = None) -> TestClient:
+    return TestClient(make_app(Settings(environment="test", allow_local_login=True), rate_limiter=rate_limiter))
+
+
+def test_rate_limiter_returns_retry_after_for_login_burst() -> None:
+    limiter = InMemoryRateLimiter({"auth.login": RateLimitRule(window_seconds=60, max_requests=2)})
+    client = make_client(limiter)
+    assert client.post("/api/v1/auth/wechat/login", json={"code": "local:limit-a", "consentAccepted": True}).status_code == 200
+    assert client.post("/api/v1/auth/wechat/login", json={"code": "local:limit-b", "consentAccepted": True}).status_code == 200
+    response = client.post("/api/v1/auth/wechat/login", json={"code": "local:limit-c", "consentAccepted": True})
+    assert response.status_code == 429
+    assert response.json()["error"]["code"] == "RATE_LIMITED"
+    assert int(response.headers["Retry-After"]) >= 1
+
+
+def test_rate_limiter_resets_at_window_boundary() -> None:
+    limiter = InMemoryRateLimiter({"test": RateLimitRule(window_seconds=10, max_requests=1)})
+    assert limiter.check("test", "subject", now=10.0) is None
+    assert limiter.check("test", "subject", now=10.5) is not None
+    assert limiter.check("test", "subject", now=20.0) is None
+
+
+def test_rate_limiter_prunes_expired_keys_without_affecting_active_windows() -> None:
+    limiter = InMemoryRateLimiter({"test": RateLimitRule(window_seconds=10, max_requests=2)})
+    assert limiter.check("test", "expired", now=10.0) is None
+    assert limiter.check("test", "active", now=10.0) is None
+    assert limiter.check("test", "active", now=10.5) is None
+    assert limiter.check("test", "active", now=10.6) is not None
+    assert limiter.check("test", "new", now=20.0) is None
+    assert ("test", "expired") not in limiter._windows
+    assert ("test", "active") not in limiter._windows
 
 
 def login(client: TestClient, subject: str = "alice") -> str:
@@ -51,6 +85,53 @@ def test_health_and_request_id() -> None:
     assert response.headers["X-Request-ID"] == "req_test"
 
 
+def test_unexpected_store_exception_is_redacted() -> None:
+    class BrokenStore(MemoryStore):
+        def ready(self) -> bool:
+            raise RuntimeError("database password=should-not-leak")
+
+    client = TestClient(
+        make_app(Settings(environment="test", allow_local_login=True), store_override=BrokenStore()),
+        raise_server_exceptions=False,
+    )
+    response = client.get("/api/v1/health/ready", headers={"X-Request-ID": "req_internal"})
+    assert response.status_code == 503
+    assert response.json() == {
+            "error": {
+                "code": "DEPENDENCY_NOT_READY",
+                "message": "必要依赖尚未就绪。",
+                "details": [],
+        },
+        "requestId": "req_internal",
+    }
+    assert "should-not-leak" not in response.text
+
+
+def test_health_ready_maps_store_failure_to_dependency_not_ready() -> None:
+    class UnavailableStore(MemoryStore):
+        def ready(self) -> bool:
+            raise RuntimeError("connection refused")
+
+    client = TestClient(make_app(Settings(environment="test", allow_local_login=True), store_override=UnavailableStore()))
+    response = client.get("/api/v1/health/ready")
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "DEPENDENCY_NOT_READY"
+    assert "connection refused" not in response.text
+
+
+def test_logout_records_audit_without_token() -> None:
+    store = MemoryStore()
+    client = TestClient(make_app(Settings(environment="test", allow_local_login=True), store_override=store))
+    token = login(client, "logout-audit")
+    response = client.post("/api/v1/auth/logout", headers={"Authorization": f"Bearer {token}", "X-Request-ID": "req_logout"})
+    assert response.status_code == 200
+    events = [event for event in store.audit_events if event["action"] == "LOGOUT"]
+    assert len(events) == 1
+    assert events[0]["requestId"] == "req_logout"
+    assert events[0]["resourceType"] == "SESSION"
+    assert token not in str(events[0])
+
+
 def test_openapi_has_typed_responses_and_production_rejects_memory() -> None:
     app = make_app(Settings(environment="test", allow_local_login=True))
     schema = app.openapi()
@@ -62,6 +143,59 @@ def test_openapi_has_typed_responses_and_production_rejects_memory() -> None:
         assert "memory store" in str(error)
     else:
         raise AssertionError("production must reject the memory store")
+
+
+def test_openapi_contract_has_all_public_routes_and_typed_success_responses() -> None:
+    schema = make_app(Settings(environment="test", allow_local_login=True)).openapi()
+    expected_operations = {
+        ("get", "/api/v1/health/live"),
+        ("get", "/api/v1/health/ready"),
+        ("post", "/api/v1/auth/wechat/login"),
+        ("post", "/api/v1/auth/logout"),
+        ("post", "/api/v1/account/deletion-requests"),
+        ("post", "/api/v1/blocks"),
+        ("delete", "/api/v1/blocks/{blocked_user_id}"),
+        ("post", "/api/v1/reports"),
+        ("post", "/api/v1/invitations"),
+        ("post", "/api/v1/invitations/{invitation_id}/accept"),
+        ("post", "/api/v1/invitations/{invitation_id}/reject"),
+        ("post", "/api/v1/conversations"),
+        ("get", "/api/v1/conversations"),
+        ("get", "/api/v1/conversations/{conversation_id}/messages"),
+        ("post", "/api/v1/conversations/{conversation_id}/messages"),
+        ("get", "/api/v1/me/profile"),
+        ("put", "/api/v1/me/profile"),
+        ("get", "/api/v1/profiles/{profile_id}"),
+        ("get", "/api/v1/profiles"),
+        ("get", "/api/v1/me/match-preferences"),
+        ("put", "/api/v1/me/match-preferences"),
+        ("get", "/api/v1/projects/{project_id}/matches"),
+        ("get", "/api/v1/me/project-matches"),
+        ("post", "/api/v1/recommendation-impressions"),
+        ("post", "/api/v1/projects"),
+        ("get", "/api/v1/projects/{project_id}"),
+        ("get", "/api/v1/projects/{project_id}/members"),
+        ("patch", "/api/v1/projects/{project_id}"),
+        ("post", "/api/v1/projects/{project_id}/publish"),
+        ("post", "/api/v1/projects/{project_id}/close"),
+        ("get", "/api/v1/projects"),
+        ("get", "/api/v1/me/projects"),
+    }
+    actual_operations = {
+        (method, path)
+        for path, methods in schema["paths"].items()
+        for method, operation in methods.items()
+        if isinstance(operation, dict) and "responses" in operation
+    }
+    assert actual_operations == expected_operations
+    for path, methods in schema["paths"].items():
+        for operation in methods.values():
+            if not isinstance(operation, dict) or "responses" not in operation:
+                continue
+            success = next((value for code, value in operation["responses"].items() if str(code).startswith("2")), None)
+            assert success is not None, path
+            response_schema = success.get("content", {}).get("application/json", {}).get("schema")
+            assert response_schema, path
 
 
 def test_vertical_profile_and_project_flow() -> None:
@@ -88,6 +222,187 @@ def test_vertical_profile_and_project_flow() -> None:
     assert published.json()["data"]["status"] == "PUBLISHED"
 
 
+def test_discovery_filters_visibility_blocks_and_owner_projects() -> None:
+    client = make_client()
+    owner_token = login(client, "discovery-owner")
+    candidate_token = login(client, "discovery-candidate")
+    hidden_token = login(client, "discovery-hidden")
+    viewer_token = login(client, "discovery-viewer")
+    viewer_user_id = client.post(
+        "/api/v1/auth/wechat/login", json={"code": "local:discovery-viewer", "consentAccepted": True}
+    ).json()["data"]["userId"]
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    candidate_headers = {"Authorization": f"Bearer {candidate_token}"}
+    hidden_headers = {"Authorization": f"Bearer {hidden_token}"}
+    viewer_headers = {"Authorization": f"Bearer {viewer_token}"}
+
+    candidate_login = client.post(
+        "/api/v1/auth/wechat/login",
+        json={"code": "local:discovery-candidate", "consentAccepted": True},
+    ).json()["data"]
+    hidden_login = client.post(
+        "/api/v1/auth/wechat/login",
+        json={"code": "local:discovery-hidden", "consentAccepted": True},
+    ).json()["data"]
+
+    assert client.put("/api/v1/me/profile", headers=candidate_headers, json=profile_payload()).status_code == 200
+    hidden_profile = profile_payload()
+    hidden_profile["nickname"] = "不公开用户"
+    hidden_profile["visibility"] = False
+    assert client.put("/api/v1/me/profile", headers=hidden_headers, json=hidden_profile).status_code == 200
+    assert client.put(
+        "/api/v1/me/match-preferences",
+        headers=candidate_headers,
+        json={"desiredDirections": ["AI"], "availabilitySlots": [], "version": 0},
+    ).status_code == 200
+
+    project = client.post("/api/v1/projects", headers=owner_headers, json=project_payload()).json()["data"]
+    assert client.post(
+        f"/api/v1/projects/{project['id']}/publish",
+        headers=owner_headers,
+        json={"version": project["version"]},
+    ).status_code == 200
+
+    projects = client.get(
+        "/api/v1/projects?direction=ai&competition=%E4%BA%92%E8%81%94%E7%BD%91%2B&stage=idea&skill=python",
+        headers=viewer_headers,
+    )
+    assert projects.status_code == 200
+    assert [item["id"] for item in projects.json()["data"]] == [project["id"]]
+    assert client.post(
+        "/api/v1/blocks", headers=owner_headers, json={"blockedUserId": viewer_user_id}
+    ).status_code == 200
+    assert client.get("/api/v1/projects", headers=viewer_headers).json()["data"] == []
+    assert client.get(
+        f"/api/v1/projects/{project['id']}", headers=viewer_headers
+    ).status_code == 404
+
+    talent = client.get(
+        "/api/v1/profiles?skill=python&direction=ai&collaborationRole=FLEXIBLE&minHoursPerWeek=6&maxHoursPerWeek=10",
+        headers=viewer_headers,
+    )
+    assert talent.status_code == 200
+    assert [item["id"] for item in talent.json()["data"]] == [candidate_login["userId"]]
+    assert "version" not in talent.json()["data"][0]
+    assert client.get(f"/api/v1/profiles/{hidden_login['userId']}", headers=viewer_headers).status_code == 404
+
+    assert client.post(
+        "/api/v1/blocks", headers=candidate_headers, json={"blockedUserId": viewer_user_id}
+    ).status_code == 200
+    assert client.get(f"/api/v1/profiles/{candidate_login['userId']}", headers=viewer_headers).status_code == 404
+    assert client.get("/api/v1/profiles", headers=viewer_headers).json()["data"] == []
+
+    mine = client.get("/api/v1/me/projects?status=PUBLISHED", headers=owner_headers)
+    assert mine.status_code == 200
+    assert [item["id"] for item in mine.json()["data"]] == [project["id"]]
+    assert client.get("/api/v1/profiles").status_code == 401
+
+
+def test_rule_matching_api_enforces_owner_visibility_constraints_and_cursor() -> None:
+    client = make_client()
+    owner_token = login(client, "match-owner")
+    candidate_token = login(client, "match-candidate")
+    incomplete_token = login(client, "match-incomplete")
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    candidate_headers = {"Authorization": f"Bearer {candidate_token}"}
+    incomplete_headers = {"Authorization": f"Bearer {incomplete_token}"}
+
+    candidate_profile = profile_payload()
+    candidate_profile["skills"] = ["Python", "MySQL"]
+    assert client.put("/api/v1/me/profile", headers=candidate_headers, json=candidate_profile).status_code == 200
+    assert client.put(
+        "/api/v1/me/match-preferences",
+        headers=candidate_headers,
+        json={"desiredDirections": ["AI"], "availabilitySlots": [], "version": 0},
+    ).status_code == 200
+
+    project_payload_value = project_payload()
+    project_payload_value["roles"][0]["requiredSkills"] = ["Python"]
+    project = client.post("/api/v1/projects", headers=owner_headers, json=project_payload_value).json()["data"]
+    published = client.post(
+        f"/api/v1/projects/{project['id']}/publish", headers=owner_headers, json={"version": project["version"]}
+    ).json()["data"]
+    role_id = published["roles"][0]["id"]
+
+    owner_results = client.get(
+        f"/api/v1/projects/{published['id']}/matches?roleId={role_id}&limit=1", headers=owner_headers
+    )
+    assert owner_results.status_code == 200
+    assert owner_results.json()["data"][0]["targetType"] == "PROFILE"
+    assert owner_results.json()["data"][0]["targetId"] == client.post(
+        "/api/v1/auth/wechat/login", json={"code": "local:match-candidate", "consentAccepted": True}
+    ).json()["data"]["userId"]
+    assert owner_results.json()["meta"]["recommendationRequestId"].startswith("rrq_")
+    recommendation_request_id = owner_results.json()["meta"]["recommendationRequestId"]
+    impression = client.post(
+        "/api/v1/recommendation-impressions",
+        headers=owner_headers,
+        json={
+            "recommendationRequestId": recommendation_request_id,
+            "items": [{"targetType": "PROFILE", "targetId": owner_results.json()["data"][0]["targetId"], "position": 1}],
+            "occurredAt": datetime.now(UTC).isoformat(),
+        },
+    )
+    assert impression.status_code == 200
+    assert impression.json()["data"][0]["duplicate"] is False
+    duplicate = client.post(
+        "/api/v1/recommendation-impressions",
+        headers=owner_headers,
+        json={
+            "recommendationRequestId": recommendation_request_id,
+            "items": [{"targetType": "PROFILE", "targetId": owner_results.json()["data"][0]["targetId"], "position": 1}],
+            "occurredAt": datetime.now(UTC).isoformat(),
+        },
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["data"][0]["duplicate"] is True
+    conflict = client.post(
+        "/api/v1/recommendation-impressions",
+        headers=owner_headers,
+        json={
+            "recommendationRequestId": recommendation_request_id,
+            "items": [{"targetType": "PROFILE", "targetId": owner_results.json()["data"][0]["targetId"], "position": 2}],
+            "occurredAt": datetime.now(UTC).isoformat(),
+        },
+    )
+    assert conflict.status_code == 409
+    assert client.post(
+        "/api/v1/recommendation-impressions",
+        headers=candidate_headers,
+        json={
+            "recommendationRequestId": recommendation_request_id,
+            "items": [{"targetType": "PROFILE", "targetId": owner_results.json()["data"][0]["targetId"], "position": 1}],
+            "occurredAt": datetime.now(UTC).isoformat(),
+        },
+    ).status_code == 422
+    invalid_target = client.post(
+        "/api/v1/recommendation-impressions",
+        headers=owner_headers,
+        json={
+            "recommendationRequestId": recommendation_request_id,
+            "items": [{"targetType": "PROFILE", "targetId": "usr_not_a_candidate", "position": 1}],
+            "occurredAt": datetime.now(UTC).isoformat(),
+        },
+    )
+    assert invalid_target.status_code == 422
+
+    forbidden = client.get(
+        f"/api/v1/projects/{published['id']}/matches?roleId={role_id}", headers=candidate_headers
+    )
+    assert forbidden.status_code == 403
+
+    candidate_results = client.get("/api/v1/me/project-matches?limit=1", headers=candidate_headers)
+    assert candidate_results.status_code == 200
+    assert candidate_results.json()["data"][0]["targetType"] == "PROJECT_ROLE"
+    assert candidate_results.json()["data"][0]["targetId"] == role_id
+
+    invalid_cursor = client.get(
+        f"/api/v1/projects/{published['id']}/matches?roleId={role_id}&cursor=rrq_invalid", headers=owner_headers
+    )
+    assert invalid_cursor.status_code == 422
+    assert client.get("/api/v1/me/project-matches", headers=incomplete_headers).status_code == 409
+
+
 def test_auth_and_version_boundaries() -> None:
     client = make_client()
     assert client.get("/api/v1/me/profile").status_code == 401
@@ -100,6 +415,165 @@ def test_auth_and_version_boundaries() -> None:
     stale = profile_payload()
     stale["version"] = 0
     assert client.put("/api/v1/me/profile", headers=headers, json=stale).status_code == 409
+
+
+def test_http_observability_log_is_structured_and_redacted(caplog) -> None:
+    client = make_client()
+    token = login(client, "observability")
+    with caplog.at_level(logging.INFO, logger="teamup.http"):
+        response = client.get(
+            "/api/v1/me/profile?private_query=should_not_log",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert response.status_code == 200
+    events = [record.message for record in caplog.records if record.name == "teamup.http"]
+    assert events
+    event = events[-1]
+    assert '"event":"http_request_completed"' in event
+    assert '"requestId":"' in event
+    assert '"method":"GET"' in event
+    assert '"path":"/api/v1/me/profile"' in event
+    assert token not in event
+    assert "private_query" not in event
+
+
+def test_reports_validate_targets_and_are_idempotent() -> None:
+    client = make_client()
+    reporter_token = login(client, "reporter")
+    target_token = login(client, "report-target")
+    reporter_headers = {"Authorization": f"Bearer {reporter_token}"}
+    target_headers = {"Authorization": f"Bearer {target_token}"}
+    target_id = client.post(
+        "/api/v1/auth/wechat/login",
+        json={"code": "local:report-target", "consentAccepted": True},
+    ).json()["data"]["userId"]
+    payload = {
+        "targetType": "USER",
+        "targetId": target_id,
+        "reason": "HARASSMENT",
+        "description": "  重复骚扰  ",
+    }
+    created = client.post(
+        "/api/v1/reports",
+        headers={**reporter_headers, "X-Request-ID": "req_client_report_1"},
+        json=payload,
+    )
+    assert created.status_code == 200
+    assert created.headers["X-Request-ID"] == "req_client_report_1"
+    assert created.json()["data"]["status"] == "PENDING"
+    repeated = client.post("/api/v1/reports", headers=reporter_headers, json=payload)
+    assert repeated.status_code == 200
+    assert repeated.json()["data"]["id"] == created.json()["data"]["id"]
+    assert client.post("/api/v1/reports", headers=target_headers, json=payload).status_code == 404
+    assert client.post(
+        "/api/v1/reports",
+        headers=reporter_headers,
+        json={**payload, "targetType": "MESSAGE", "targetId": "msg_private"},
+    ).status_code == 404
+    assert client.post("/api/v1/reports", json=payload).status_code == 401
+    invalid_request_id = client.post(
+        "/api/v1/reports",
+        headers={**reporter_headers, "X-Request-ID": "unsafe request id"},
+        json={**payload, "reason": "SPAM"},
+    )
+    assert invalid_request_id.status_code == 200
+    assert invalid_request_id.headers["X-Request-ID"].startswith("req_")
+    assert invalid_request_id.headers["X-Request-ID"] != "unsafe request id"
+
+
+def test_account_deletion_request_revokes_all_sessions_and_blocks_login() -> None:
+    client = make_client()
+    first_token = login(client, "delete-account")
+    second_token = login(client, "delete-account")
+    first_headers = {"Authorization": f"Bearer {first_token}"}
+    second_headers = {"Authorization": f"Bearer {second_token}"}
+    response = client.post("/api/v1/account/deletion-requests", headers=first_headers)
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "PENDING"
+    assert client.get("/api/v1/me/profile", headers=first_headers).status_code == 401
+    assert client.get("/api/v1/me/profile", headers=second_headers).status_code == 401
+    relogin = client.post(
+        "/api/v1/auth/wechat/login",
+        json={"code": "local:delete-account", "consentAccepted": True},
+    )
+    assert relogin.status_code == 403
+
+
+def test_account_deletion_removes_user_from_discovery_and_matching() -> None:
+    client = make_client()
+    owner_token = login(client, "deletion-filter-owner")
+    candidate_token = login(client, "deletion-filter-candidate")
+    viewer_token = login(client, "deletion-filter-viewer")
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    candidate_headers = {"Authorization": f"Bearer {candidate_token}"}
+    viewer_headers = {"Authorization": f"Bearer {viewer_token}"}
+    candidate_id = client.post(
+        "/api/v1/auth/wechat/login",
+        json={"code": "local:deletion-filter-candidate", "consentAccepted": True},
+    ).json()["data"]["userId"]
+
+    assert client.put(
+        "/api/v1/me/profile", headers=candidate_headers, json=profile_payload()
+    ).status_code == 200
+    assert client.put(
+        "/api/v1/me/match-preferences",
+        headers=candidate_headers,
+        json={"desiredDirections": ["AI"], "availabilitySlots": [], "version": 0},
+    ).status_code == 200
+    candidate_project = client.post(
+        "/api/v1/projects", headers=candidate_headers, json=project_payload()
+    ).json()["data"]
+    assert client.post(
+        f"/api/v1/projects/{candidate_project['id']}/publish",
+        headers=candidate_headers,
+        json={"version": candidate_project["version"]},
+    ).status_code == 200
+    owner_project = client.post(
+        "/api/v1/projects", headers=owner_headers, json=project_payload()
+    ).json()["data"]
+    owner_project = client.post(
+        f"/api/v1/projects/{owner_project['id']}/publish",
+        headers=owner_headers,
+        json={"version": owner_project["version"]},
+    ).json()["data"]
+    role_id = owner_project["roles"][0]["id"]
+
+    assert candidate_id in {
+        item["id"] for item in client.get("/api/v1/profiles", headers=viewer_headers).json()["data"]
+    }
+    assert candidate_project["id"] in {
+        item["id"] for item in client.get("/api/v1/projects", headers=viewer_headers).json()["data"]
+    }
+    assert candidate_id in {
+        item["targetId"]
+        for item in client.get(
+            f"/api/v1/projects/{owner_project['id']}/matches?roleId={role_id}",
+            headers=owner_headers,
+        ).json()["data"]
+    }
+
+    assert client.post(
+        "/api/v1/account/deletion-requests", headers=candidate_headers
+    ).status_code == 200
+    assert client.get(
+        f"/api/v1/profiles/{candidate_id}", headers=viewer_headers
+    ).status_code == 404
+    assert candidate_id not in {
+        item["id"] for item in client.get("/api/v1/profiles", headers=viewer_headers).json()["data"]
+    }
+    assert candidate_project["id"] not in {
+        item["id"] for item in client.get("/api/v1/projects", headers=viewer_headers).json()["data"]
+    }
+    assert client.get(
+        f"/api/v1/projects/{candidate_project['id']}", headers=viewer_headers
+    ).status_code == 404
+    assert candidate_id not in {
+        item["targetId"]
+        for item in client.get(
+            f"/api/v1/projects/{owner_project['id']}/matches?roleId={role_id}",
+            headers=owner_headers,
+        ).json()["data"]
+    }
 
 
 def test_project_owner_is_enforced() -> None:

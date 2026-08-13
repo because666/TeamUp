@@ -1,12 +1,28 @@
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from app.db_models import Base, InvitationRow, SessionRow, UserRow
+from app.db_models import (
+    AccountDeletionRequestRow,
+    AuditEventRow,
+    Base,
+    InvitationRow,
+    RecommendationImpressionRow,
+    SessionRow,
+    UserRow,
+)
 from app.errors import ServiceError
-from app.schemas import MatchPreferencesPayload, ProfilePayload, ProjectPayload, ProjectUpdate
+from app.schemas import (
+    MatchPreferencesPayload,
+    ProfilePayload,
+    ProjectPayload,
+    ProjectUpdate,
+    RecommendationImpressionItem,
+    RecommendationImpressionRequest,
+    ReportRequest,
+)
 from app.sql_store import SqlAlchemyStore, db_now, token_digest
 
 
@@ -96,8 +112,13 @@ def test_token_is_hashed_and_logout_revokes_session(sql_store) -> None:
         assert row.token_digest == token_digest(token)
         assert token not in row.token_digest
 
-    store.logout(token)
+    store.logout(token, "req_sql_logout")
     assert_service_error("SESSION_EXPIRED", lambda: store.user_for_token(token))
+    with factory() as session:
+        event = session.scalar(select(AuditEventRow).where(AuditEventRow.action == "LOGOUT"))
+        assert event is not None
+        assert event.request_id == "req_sql_logout"
+        assert event.resource_type == "SESSION"
 
 
 def test_expired_session_is_rejected(sql_store) -> None:
@@ -174,6 +195,100 @@ def test_project_owner_version_roles_and_pagination(sql_store) -> None:
     assert {first_page[0].id, second_page[0].id} == {published_first.id, published_second.id}
     assert cursor is not None
     assert next_cursor is None
+
+
+def test_discovery_queries_filter_public_profiles_and_owned_projects(sql_store) -> None:
+    store, _, _ = sql_store
+    owner_id, _, _ = store.login("wechat:app-a:discovery-owner")
+    candidate_id, _, _ = store.login("wechat:app-a:discovery-candidate")
+    viewer_id, _, _ = store.login("wechat:app-a:discovery-viewer")
+    store.save_profile(candidate_id, profile_payload(), 0)
+    store.save_match_preferences(
+        candidate_id,
+        MatchPreferencesPayload.model_validate({"desiredDirections": ["AI"], "availabilitySlots": []}),
+        0,
+    )
+    project = store.create_project(owner_id, project_payload())
+    published = store.publish_project(owner_id, project.id, project.version)
+
+    profiles, profile_cursor = store.list_public_profiles(
+        viewer_id, 20, None, "python", "ai", "FLEXIBLE", 6, 10
+    )
+    assert profile_cursor is None
+    assert [item.id for item in profiles] == [candidate_id]
+    assert store.get_public_profile(viewer_id, candidate_id).id == candidate_id
+    mine, mine_cursor = store.list_my_projects(owner_id, "PUBLISHED", 20, None)
+    assert mine_cursor is None
+    assert [item.id for item in mine] == [published.id]
+
+    store.create_block(candidate_id, viewer_id)
+    assert_service_error("RESOURCE_NOT_FOUND", lambda: store.get_public_profile(viewer_id, candidate_id))
+    profiles, _ = store.list_public_profiles(viewer_id, 20, None, None, None, None, None, None)
+    assert profiles == []
+
+    store.request_account_deletion(candidate_id, "req_discovery_candidate_deletion")
+    assert_service_error("RESOURCE_NOT_FOUND", lambda: store.get_public_profile(owner_id, candidate_id))
+    profiles, _ = store.list_public_profiles(owner_id, 20, None, None, None, None, None, None)
+    assert candidate_id not in {profile.id for profile in profiles}
+
+
+def test_rule_matching_store_returns_explanations_and_enforces_hard_constraints(sql_store) -> None:
+    store, _, _ = sql_store
+    owner_id, _, _ = store.login("wechat:app-a:match-owner")
+    candidate_id, _, _ = store.login("wechat:app-a:match-candidate")
+    candidate_payload = profile_payload()
+    store.save_profile(candidate_id, candidate_payload, 0)
+    store.save_match_preferences(
+        candidate_id,
+        MatchPreferencesPayload.model_validate({"desiredDirections": ["AI"], "availabilitySlots": []}),
+        0,
+    )
+    project = store.create_project(owner_id, project_payload())
+    published = store.publish_project(owner_id, project.id, project.version)
+    role_id = published.roles[0].id
+    results, cursor, request_id = store.project_matches(owner_id, published.id, role_id, 1, None)
+    assert request_id.startswith("rrq_")
+    assert cursor is None
+    assert results[0].targetId == candidate_id
+    assert results[0].targetType == "PROFILE"
+    assert results[0].engineVersion == "match-v0.1"
+    assert "rankingScore" not in results[0].model_dump()
+
+    impression_payload = RecommendationImpressionRequest.model_validate(
+        {
+            "recommendationRequestId": request_id,
+            "items": [{"targetType": "PROFILE", "targetId": candidate_id, "position": 1}],
+            "occurredAt": datetime.now(UTC),
+        }
+    )
+    recorded = store.record_recommendation_impressions(owner_id, impression_payload)
+    assert recorded[0].duplicate is False
+    duplicate = store.record_recommendation_impressions(owner_id, impression_payload)
+    assert duplicate[0].duplicate is True
+    assert_service_error(
+        "IMPRESSION_CONFLICT",
+        lambda: store.record_recommendation_impressions(
+            owner_id,
+            RecommendationImpressionRequest.model_validate(
+                {
+                    "recommendationRequestId": request_id,
+                    "items": [RecommendationImpressionItem(targetType="PROFILE", targetId=candidate_id, position=2)],
+                    "occurredAt": datetime.now(UTC),
+                }
+            ),
+        ),
+    )
+    with sql_store[1]() as session:
+        row = session.scalar(select(RecommendationImpressionRow).where(RecommendationImpressionRow.request_id == request_id))
+        assert row is not None
+        assert row.viewer_user_id == owner_id
+
+    project_results, _, _ = store.user_project_matches(candidate_id, 20, None)
+    assert [item.targetId for item in project_results] == [role_id]
+
+    store.create_block(owner_id, candidate_id)
+    blocked, _, _ = store.project_matches(owner_id, published.id, role_id, 20, None)
+    assert blocked == []
 
 
 def test_match_preferences_and_project_constraints_survive_recreation(sql_store) -> None:
@@ -311,6 +426,73 @@ def test_blocks_are_bidirectional_and_prevent_new_members(sql_store) -> None:
     assert store.remove_block(owner_id, member_id) is False
     assert store.users_blocked(owner_id, member_id) is False
     assert store.add_project_member(published.id, published.roles[0].id, member_id).userId == member_id
+
+
+def test_reports_persist_idempotently_and_enforce_message_visibility(sql_store) -> None:
+    store, factory, engine = sql_store
+    reporter_id, _, _ = store.login("wechat:app-a:reporter")
+    target_id, _, _ = store.login("wechat:app-a:report-target")
+    outsider_id, _, _ = store.login("wechat:app-a:report-outsider")
+    user_report = ReportRequest(
+        targetType="USER", targetId=target_id, reason="HARASSMENT", description="重复骚扰"
+    )
+    created = store.create_report(reporter_id, user_report, "req_report_1")
+    assert store.create_report(reporter_id, user_report, "req_report_retry") == created
+    recreated = SqlAlchemyStore(factory, engine)
+    assert recreated.create_report(reporter_id, user_report, "req_report_recreated") == created
+    with factory() as session:
+        report_events = list(
+            session.scalars(select(AuditEventRow).where(AuditEventRow.resource_id == created.id))
+        )
+        assert len(report_events) == 1
+        assert report_events[0].request_id == "req_report_1"
+        assert report_events[0].action == "REPORT_SUBMITTED"
+    assert_service_error(
+        "RESOURCE_NOT_FOUND",
+        lambda: recreated.create_report(
+            target_id, user_report.model_copy(update={"targetId": target_id}), "req_report_self"
+        ),
+    )
+
+    project = recreated.create_project(target_id, project_payload("举报消息项目"))
+    published = recreated.publish_project(target_id, project.id, project.version)
+    conversation = recreated.create_conversation(reporter_id, published.id, target_id)
+    message = recreated.send_message(target_id, conversation.id, "report-message-1", "不合适的消息")
+    message_report = ReportRequest(
+        targetType="MESSAGE", targetId=message.id, reason="INAPPROPRIATE_CONTENT", description=""
+    )
+    assert recreated.create_report(reporter_id, message_report, "req_report_message").targetId == message.id
+    assert_service_error(
+        "RESOURCE_NOT_FOUND",
+        lambda: recreated.create_report(outsider_id, message_report, "req_report_outsider"),
+    )
+    recreated.request_account_deletion(target_id, "req_report_target_deletion")
+    assert recreated.create_report(reporter_id, user_report, "req_report_after_deletion") == created
+
+
+def test_account_deletion_request_persists_and_revokes_all_sessions(sql_store) -> None:
+    store, factory, engine = sql_store
+    user_id, first_token, _ = store.login("wechat:app-a:delete-account")
+    same_user_id, second_token, _ = store.login("wechat:app-a:delete-account")
+    assert same_user_id == user_id
+    request_data = store.request_account_deletion(user_id, "req_delete_1")
+    assert request_data.status == "PENDING"
+    assert_service_error("SESSION_EXPIRED", lambda: store.user_for_token(first_token))
+    assert_service_error("SESSION_EXPIRED", lambda: store.user_for_token(second_token))
+    assert_service_error("FORBIDDEN", lambda: store.login("wechat:app-a:delete-account"))
+    recreated = SqlAlchemyStore(factory, engine)
+    assert recreated.request_account_deletion(user_id, "req_delete_retry") == request_data
+    with factory() as session:
+        user = session.get(UserRow, user_id)
+        row = session.get(AccountDeletionRequestRow, request_data.id)
+        assert user is not None and user.status == "DELETION_PENDING"
+        assert row is not None and row.pending_user_id == user_id
+        audit = session.scalar(
+            select(AuditEventRow).where(AuditEventRow.resource_id == request_data.id)
+        )
+        assert audit is not None
+        assert audit.request_id == "req_delete_1"
+        assert audit.action == "ACCOUNT_DELETION_REQUESTED"
 
 
 def test_invitations_persist_accept_reject_expire_and_enforce_permissions(sql_store) -> None:

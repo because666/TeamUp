@@ -1,5 +1,6 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -8,10 +9,23 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.config import Settings
-from app.db_models import SessionRow
+from app.db_models import (
+    AccountDeletionRequestRow,
+    AuditEventRow,
+    RecommendationImpressionRow,
+    ReportRow,
+    SessionRow,
+)
 from app.errors import ServiceError
 from app.main import make_app
-from app.schemas import MatchPreferencesPayload, ProfilePayload, ProjectPayload, ProjectUpdate
+from app.schemas import (
+    MatchPreferencesPayload,
+    ProfilePayload,
+    ProjectPayload,
+    ProjectUpdate,
+    RecommendationImpressionRequest,
+    ReportRequest,
+)
 from app.sql_store import SqlAlchemyStore, token_digest
 
 
@@ -344,5 +358,140 @@ def test_mysql_conversation_and_message_concurrency_is_idempotent() -> None:
         assert len(successes) == 1
         assert [error.code for error in failures] == ["MESSAGE_IDEMPOTENCY_CONFLICT"]
         assert len(store.list_messages(owner_id, conversation_id, 20, None)[0]) == 2
+    finally:
+        engine.dispose()
+
+
+def test_mysql_discovery_matching_governance_and_deletion_persist() -> None:
+    assert MYSQL_URL is not None
+    engine = create_engine(MYSQL_URL, pool_pre_ping=True)
+    factory = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
+    store = SqlAlchemyStore(factory, engine)
+    suffix = uuid4().hex
+    owner_id, _, _ = store.login(f"wechat:integration:p0-owner:{suffix}")
+    candidate_id, candidate_token, _ = store.login(f"wechat:integration:p0-candidate:{suffix}")
+    viewer_id, _, _ = store.login(f"wechat:integration:p0-viewer:{suffix}")
+
+    try:
+        store.save_profile(candidate_id, profile_payload("MySQL 候选人"), 0)
+        store.save_match_preferences(
+            candidate_id,
+            MatchPreferencesPayload.model_validate(
+                {
+                    "desiredDirections": ["后端"],
+                    "availabilitySlots": [
+                        {"weekday": 6, "startMinute": 540, "endMinute": 720}
+                    ],
+                }
+            ),
+            0,
+        )
+        draft = store.create_project(owner_id, project_payload())
+        published = store.publish_project(owner_id, draft.id, draft.version)
+        role_id = published.roles[0].id
+
+        profiles, _ = store.list_public_profiles(
+            viewer_id, 20, None, "python", "后端", "FLEXIBLE", 1, 20
+        )
+        assert candidate_id in {profile.id for profile in profiles}
+        projects, _ = store.list_projects(
+            "PUBLISHED", 20, None, "后端", None, "IDEA", "python", viewer_id
+        )
+        assert published.id in {project.id for project in projects}
+
+        matches, _, recommendation_request_id = store.project_matches(
+            owner_id, published.id, role_id, 20, None
+        )
+        assert candidate_id in {match.targetId for match in matches}
+        impressions = store.record_recommendation_impressions(
+            owner_id,
+            RecommendationImpressionRequest.model_validate(
+                {
+                    "recommendationRequestId": recommendation_request_id,
+                    "items": [
+                        {"targetType": "PROFILE", "targetId": candidate_id, "position": 1}
+                    ],
+                    "occurredAt": datetime.now(UTC),
+                }
+            ),
+        )
+        assert impressions[0].duplicate is False
+
+        report = store.create_report(
+            viewer_id,
+            ReportRequest(
+                targetType="USER",
+                targetId=candidate_id,
+                reason="HARASSMENT",
+                description="MySQL 治理验证",
+            ),
+            "req_mysql_report",
+        )
+        deletion_request = store.request_account_deletion(
+            candidate_id, "req_mysql_deletion"
+        )
+        with pytest.raises(ServiceError) as captured:
+            store.user_for_token(candidate_token)
+        assert captured.value.code == "SESSION_EXPIRED"
+        filtered_profiles, _ = store.list_public_profiles(
+            viewer_id, 20, None, None, None, None, None, None
+        )
+        assert candidate_id not in {profile.id for profile in filtered_profiles}
+        filtered_matches, _, _ = store.project_matches(
+            owner_id, published.id, role_id, 20, None
+        )
+        assert candidate_id not in {match.targetId for match in filtered_matches}
+
+        recreated = SqlAlchemyStore(factory, engine)
+        assert recreated.create_report(
+            viewer_id,
+            ReportRequest(
+                targetType="USER",
+                targetId=candidate_id,
+                reason="HARASSMENT",
+                description="ignored by idempotency",
+            ),
+            "req_mysql_report_retry",
+        ) == report
+        assert recreated.request_account_deletion(
+            candidate_id, "req_mysql_deletion_retry"
+        ) == deletion_request
+
+        with factory() as session:
+            assert session.scalar(
+                select(RecommendationImpressionRow).where(
+                    RecommendationImpressionRow.request_id == recommendation_request_id
+                )
+            ) is not None
+            assert session.get(ReportRow, report.id) is not None
+            assert session.get(AccountDeletionRequestRow, deletion_request.id) is not None
+            actions = set(
+                session.scalars(
+                    select(AuditEventRow.action).where(
+                        AuditEventRow.resource_id.in_([report.id, deletion_request.id])
+                    )
+                )
+            )
+            assert actions == {"REPORT_SUBMITTED", "ACCOUNT_DELETION_REQUESTED"}
+
+        viewer_profile = profile_payload("MySQL 项目匹配用户")
+        store.save_profile(viewer_id, viewer_profile, 0)
+        store.save_match_preferences(
+            viewer_id,
+            MatchPreferencesPayload.model_validate(
+                {
+                    "desiredDirections": ["后端"],
+                    "availabilitySlots": [
+                        {"weekday": 6, "startMinute": 540, "endMinute": 720}
+                    ],
+                }
+            ),
+            0,
+        )
+        before_owner_deletion, _, _ = store.user_project_matches(viewer_id, 50, None)
+        assert role_id in {match.targetId for match in before_owner_deletion}
+        store.request_account_deletion(owner_id, "req_mysql_owner_deletion")
+        after_owner_deletion, _, _ = store.user_project_matches(viewer_id, 50, None)
+        assert role_id not in {match.targetId for match in after_owner_deletion}
     finally:
         engine.dispose()

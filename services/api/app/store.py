@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from .errors import ServiceError
 from .schemas import (
+    AccountDeletionRequestData,
     BlockData,
     ConversationData,
     InvitationAcceptData,
@@ -16,6 +17,7 @@ from .schemas import (
     MatchPreferencesData,
     MatchPreferencesPayload,
     ProfileData,
+    PublicProfileData,
     ProfilePayload,
     ProjectData,
     ProjectMemberData,
@@ -23,6 +25,18 @@ from .schemas import (
     ProjectUpdate,
     RoleData,
     RolePayload,
+    MatchResultData,
+    RecommendationImpressionData,
+    RecommendationImpressionRequest,
+    ReportData,
+    ReportRequest,
+)
+from .matching_service import (
+    MatchSnapshot,
+    build_profile_match,
+    build_project_match,
+    page_snapshot,
+    validate_impression_time,
 )
 
 
@@ -33,7 +47,8 @@ def now_utc() -> datetime:
 class Store(Protocol):
     def login(self, subject: str) -> tuple[str, str, bool]: ...
     def user_for_token(self, token: str) -> str: ...
-    def logout(self, token: str) -> None: ...
+    def logout(self, token: str, request_id: str = "req_unknown") -> None: ...
+    def request_account_deletion(self, user_id: str, request_id: str) -> AccountDeletionRequestData: ...
     def create_block(self, blocker_id: str, blocked_id: str) -> BlockData: ...
     def remove_block(self, blocker_id: str, blocked_id: str) -> bool: ...
     def users_blocked(self, first_user_id: str, second_user_id: str) -> bool: ...
@@ -55,19 +70,54 @@ class Store(Protocol):
         self, requester_id: str, conversation_id: str, client_message_id: str, content: str
     ) -> MessageData: ...
     def get_profile(self, user_id: str) -> ProfileData | None: ...
+    def get_public_profile(self, requester_id: str, user_id: str) -> PublicProfileData: ...
+    def list_public_profiles(
+        self,
+        requester_id: str,
+        limit: int,
+        cursor: str | None,
+        skill: str | None,
+        direction: str | None,
+        collaboration_role: str | None,
+        min_hours_per_week: int | None,
+        max_hours_per_week: int | None,
+    ) -> tuple[list[PublicProfileData], str | None]: ...
     def save_profile(self, user_id: str, payload: ProfilePayload, version: int | None) -> ProfileData: ...
     def get_match_preferences(self, user_id: str) -> MatchPreferencesData | None: ...
     def save_match_preferences(
         self, user_id: str, payload: MatchPreferencesPayload, version: int | None
     ) -> MatchPreferencesData: ...
     def create_project(self, user_id: str, payload: ProjectPayload) -> ProjectData: ...
-    def get_project(self, project_id: str) -> ProjectData: ...
+    def get_project(self, project_id: str, requester_id: str | None = None) -> ProjectData: ...
     def update_project(self, user_id: str, project_id: str, payload: ProjectUpdate) -> ProjectData: ...
     def publish_project(self, user_id: str, project_id: str, version: int) -> ProjectData: ...
     def close_project(self, user_id: str, project_id: str, version: int) -> ProjectData: ...
     def add_project_member(self, project_id: str, role_id: str, user_id: str) -> ProjectMemberData: ...
     def list_project_members(self, requester_id: str, project_id: str) -> list[ProjectMemberData]: ...
-    def list_projects(self, status: str, limit: int, cursor: str | None) -> tuple[list[ProjectData], str | None]: ...
+    def list_projects(
+        self,
+        status: str,
+        limit: int,
+        cursor: str | None,
+        direction: str | None = None,
+        competition: str | None = None,
+        stage: str | None = None,
+        skill: str | None = None,
+        requester_id: str | None = None,
+    ) -> tuple[list[ProjectData], str | None]: ...
+    def list_my_projects(
+        self, user_id: str, status: str | None, limit: int, cursor: str | None
+    ) -> tuple[list[ProjectData], str | None]: ...
+    def project_matches(
+        self, requester_id: str, project_id: str, role_id: str, limit: int, cursor: str | None
+    ) -> tuple[list[MatchResultData], str | None, str]: ...
+    def user_project_matches(
+        self, requester_id: str, limit: int, cursor: str | None
+    ) -> tuple[list[MatchResultData], str | None, str]: ...
+    def record_recommendation_impressions(
+        self, requester_id: str, payload: RecommendationImpressionRequest
+    ) -> list[RecommendationImpressionData]: ...
+    def create_report(self, reporter_id: str, payload: ReportRequest, request_id: str) -> ReportData: ...
     def ready(self) -> bool: ...
 
 
@@ -78,6 +128,10 @@ class MemoryStore:
         self._lock = RLock()
         self.users_by_subject: dict[str, str] = {}
         self.sessions: dict[str, tuple[str, datetime]] = {}
+        self.user_statuses: dict[str, str] = {}
+        self.account_deletion_requests: dict[str, AccountDeletionRequestData] = {}
+        self.pending_deletion_by_user: dict[str, str] = {}
+        self.audit_events: list[dict[str, object]] = []
         self.blocks: dict[tuple[str, str], BlockData] = {}
         self.invitations: dict[str, InvitationData] = {}
         self.conversations: dict[str, ConversationData] = {}
@@ -86,6 +140,11 @@ class MemoryStore:
         self.match_preferences: dict[str, MatchPreferencesData] = {}
         self.projects: dict[str, ProjectData] = {}
         self.project_members: dict[str, ProjectMemberData] = {}
+        self.match_snapshots: dict[str, MatchSnapshot] = {}
+        self.recommendation_impressions: dict[tuple[str, str, str, str], RecommendationImpressionData] = {}
+        self.reports: dict[str, ReportData] = {}
+        self.report_reporters: dict[str, str] = {}
+        self.report_descriptions: dict[str, str] = {}
 
     def ready(self) -> bool:
         return True
@@ -93,6 +152,8 @@ class MemoryStore:
     def login(self, subject: str) -> tuple[str, str, bool]:
         with self._lock:
             user_id = self.users_by_subject.setdefault(subject, f"usr_{uuid4().hex}")
+            if self.user_statuses.setdefault(user_id, "ACTIVE") != "ACTIVE":
+                raise ServiceError("FORBIDDEN", "当前账号状态不允许登录。", 403)
             token = f"tu_{token_urlsafe(32)}"
             self.sessions[token] = (user_id, now_utc() + timedelta(hours=12))
             return user_id, token, user_id in self.profiles
@@ -100,14 +161,46 @@ class MemoryStore:
     def user_for_token(self, token: str) -> str:
         with self._lock:
             session = self.sessions.get(token)
-            if not session or session[1] <= now_utc():
+            if (
+                not session
+                or session[1] <= now_utc()
+                or self.user_statuses.get(session[0], "ACTIVE") != "ACTIVE"
+            ):
                 self.sessions.pop(token, None)
                 raise ServiceError("SESSION_EXPIRED", "登录状态已失效，请重新登录。", 401)
             return session[0]
 
-    def logout(self, token: str) -> None:
+    def logout(self, token: str, request_id: str = "req_unknown") -> None:
         with self._lock:
-            self.sessions.pop(token, None)
+            session = self.sessions.pop(token, None)
+            if session is not None:
+                self._append_audit_event(
+                    session[0], "LOGOUT", "SESSION", "CURRENT_SESSION", request_id
+                )
+
+    def request_account_deletion(self, user_id: str, request_id: str) -> AccountDeletionRequestData:
+        with self._lock:
+            existing_id = self.pending_deletion_by_user.get(user_id)
+            if existing_id is not None:
+                return deepcopy(self.account_deletion_requests[existing_id])
+            if self.user_statuses.get(user_id, "ACTIVE") != "ACTIVE":
+                raise ServiceError("ACCOUNT_NOT_ACTIVE", "当前账号状态不允许申请注销。", 409)
+            request_data = AccountDeletionRequestData(
+                id=f"adrq_{uuid4().hex}",
+                status="PENDING",
+                requestedAt=now_utc(),
+            )
+            self.account_deletion_requests[request_data.id] = request_data
+            self.pending_deletion_by_user[user_id] = request_data.id
+            self.user_statuses[user_id] = "DELETION_PENDING"
+            self.sessions = {
+                token: session for token, session in self.sessions.items() if session[0] != user_id
+            }
+            self._append_audit_event(
+                user_id, "ACCOUNT_DELETION_REQUESTED", "ACCOUNT_DELETION_REQUEST",
+                request_data.id, request_id
+            )
+            return deepcopy(request_data)
 
     def create_block(self, blocker_id: str, blocked_id: str) -> BlockData:
         with self._lock:
@@ -346,6 +439,59 @@ class MemoryStore:
         with self._lock:
             return deepcopy(self.profiles.get(user_id))
 
+    def get_public_profile(self, requester_id: str, user_id: str) -> PublicProfileData:
+        with self._lock:
+            if requester_id == user_id:
+                raise ServiceError("RESOURCE_NOT_FOUND", "公开名片不存在或不可见。", 404)
+            profile = self.profiles.get(user_id)
+            if (
+                profile is None
+                or self.user_statuses.get(user_id) != "ACTIVE"
+                or not profile.visibility
+                or self.users_blocked(requester_id, user_id)
+            ):
+                raise ServiceError("RESOURCE_NOT_FOUND", "公开名片不存在或不可见。", 404)
+            return self._public_profile_data(user_id, profile)
+
+    def list_public_profiles(
+        self,
+        requester_id: str,
+        limit: int,
+        cursor: str | None,
+        skill: str | None,
+        direction: str | None,
+        collaboration_role: str | None,
+        min_hours_per_week: int | None,
+        max_hours_per_week: int | None,
+    ) -> tuple[list[PublicProfileData], str | None]:
+        with self._lock:
+            profiles = []
+            for user_id, profile in self.profiles.items():
+                if (
+                    user_id == requester_id
+                    or self.user_statuses.get(user_id) != "ACTIVE"
+                    or not profile.visibility
+                    or self.users_blocked(requester_id, user_id)
+                ):
+                    continue
+                if skill and not any(value.casefold() == skill.casefold() for value in profile.skills):
+                    continue
+                preferences = self.match_preferences.get(user_id)
+                if direction and (preferences is None or not any(value.casefold() == direction.casefold() for value in preferences.desiredDirections)):
+                    continue
+                if collaboration_role and profile.rolePreference != collaboration_role:
+                    continue
+                if min_hours_per_week is not None and profile.hoursPerWeek < min_hours_per_week:
+                    continue
+                if max_hours_per_week is not None and profile.hoursPerWeek > max_hours_per_week:
+                    continue
+                profiles.append(self._public_profile_data(user_id, profile))
+            profiles.sort(key=lambda item: (item.updatedAt, item.id), reverse=True)
+            start = self._cursor_start(profiles, cursor)
+            page = profiles[start : start + limit]
+            has_more = start + limit < len(profiles)
+            return deepcopy(page), page[-1].id if has_more and page else None
+
     def save_profile(self, user_id: str, payload: ProfilePayload, version: int | None) -> ProfileData:
         with self._lock:
             existing = self.profiles.get(user_id)
@@ -413,11 +559,18 @@ class MemoryStore:
             self.projects[project_id] = data
             return deepcopy(data)
 
-    def get_project(self, project_id: str) -> ProjectData:
+    def get_project(self, project_id: str, requester_id: str | None = None) -> ProjectData:
         with self._lock:
             project = self.projects.get(project_id)
             if not project:
                 raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可见。", 404)
+            if requester_id is not None and project.ownerId != requester_id:
+                if (
+                    project.status == "DRAFT"
+                    or self.user_statuses.get(project.ownerId) != "ACTIVE"
+                    or self.users_blocked(requester_id, project.ownerId)
+                ):
+                    raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可见。", 404)
             return deepcopy(project)
 
     def update_project(self, user_id: str, project_id: str, payload: ProjectUpdate) -> ProjectData:
@@ -553,10 +706,29 @@ class MemoryStore:
                 raise ServiceError("FORBIDDEN", "你没有权限查看该项目成员。", 403)
             return deepcopy(sorted(members, key=lambda item: (item.joinedAt, item.id)))
 
-    def list_projects(self, status: str, limit: int, cursor: str | None) -> tuple[list[ProjectData], str | None]:
+    def list_projects(
+        self,
+        status: str,
+        limit: int,
+        cursor: str | None,
+        direction: str | None = None,
+        competition: str | None = None,
+        stage: str | None = None,
+        skill: str | None = None,
+        requester_id: str | None = None,
+    ) -> tuple[list[ProjectData], str | None]:
         with self._lock:
             projects = sorted(
-                (project for project in self.projects.values() if project.status == status),
+                (
+                    project for project in self.projects.values()
+                    if project.status == status
+                    and self.user_statuses.get(project.ownerId) == "ACTIVE"
+                    and (requester_id is None or not self.users_blocked(requester_id, project.ownerId))
+                    and (direction is None or project.direction.casefold() == direction.casefold())
+                    and (competition is None or project.competition.casefold() == competition.casefold())
+                    and (stage is None or project.stage.casefold() == stage.casefold())
+                    and (skill is None or any(skill.casefold() == value.casefold() for role in project.roles for value in role.skills))
+                ),
                 key=lambda item: (item.publishedAt or item.createdAt, item.id),
                 reverse=True,
             )
@@ -569,6 +741,249 @@ class MemoryStore:
             page = projects[start : start + limit]
             has_more = start + limit < len(projects)
             return deepcopy(page), (page[-1].id if has_more and page else None)
+
+    def list_my_projects(
+        self, user_id: str, status: str | None, limit: int, cursor: str | None
+    ) -> tuple[list[ProjectData], str | None]:
+        with self._lock:
+            projects = [
+                item for item in self.projects.values()
+                if item.ownerId == user_id and (status is None or item.status == status)
+            ]
+            projects.sort(key=lambda item: (item.updatedAt, item.id), reverse=True)
+            start = self._cursor_start(projects, cursor)
+            page = projects[start : start + limit]
+            has_more = start + limit < len(projects)
+            return deepcopy(page), page[-1].id if has_more and page else None
+
+    def project_matches(
+        self, requester_id: str, project_id: str, role_id: str, limit: int, cursor: str | None
+    ) -> tuple[list[MatchResultData], str | None, str]:
+        with self._lock:
+            project = self.projects.get(project_id)
+            self._require_owner(project, requester_id)
+            if project.status != "PUBLISHED":
+                raise ServiceError("PROJECT_NOT_MATCHABLE", "项目当前状态不允许匹配。", 409)
+            role = next((item for item in project.roles if item.id == role_id), None)
+            if role is None:
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目或岗位不存在。", 404)
+            if role.status != "OPEN" or role.remainingCount <= 0:
+                raise ServiceError("PROJECT_NOT_MATCHABLE", "岗位当前不允许匹配。", 409)
+            results = []
+            for candidate_id, profile in self.profiles.items():
+                if (
+                    candidate_id == requester_id
+                    or self.user_statuses.get(candidate_id) != "ACTIVE"
+                    or not profile.visibility
+                    or self.users_blocked(requester_id, candidate_id)
+                ):
+                    continue
+                if any(member.projectId == project_id and member.userId == candidate_id for member in self.project_members.values()):
+                    continue
+                preferences = self.match_preferences.get(candidate_id)
+                result = build_profile_match(project, role, candidate_id, profile, preferences)
+                if result is not None:
+                    results.append(result)
+            results.sort(key=lambda item: (-item.score, item.targetId))
+            context = f"project:{requester_id}:{project_id}:{role_id}"
+            return page_snapshot(
+                self.match_snapshots, context, results, limit, cursor, viewer_user_id=requester_id
+            )
+
+    def user_project_matches(
+        self, requester_id: str, limit: int, cursor: str | None
+    ) -> tuple[list[MatchResultData], str | None, str]:
+        with self._lock:
+            profile = self.profiles.get(requester_id)
+            if profile is None:
+                raise ServiceError("MATCH_PROFILE_INCOMPLETE", "请先完成能力名片后再匹配。", 409)
+            preferences = self.match_preferences.get(requester_id)
+            if preferences is None:
+                raise ServiceError("MATCH_PROFILE_INCOMPLETE", "请先完善匹配偏好后再匹配。", 409)
+            results = []
+            for project in self.projects.values():
+                if (
+                    project.status != "PUBLISHED"
+                    or self.user_statuses.get(project.ownerId) != "ACTIVE"
+                    or self.users_blocked(requester_id, project.ownerId)
+                ):
+                    continue
+                if any(member.projectId == project.id and member.userId == requester_id for member in self.project_members.values()):
+                    continue
+                for role in project.roles:
+                    result = build_project_match(requester_id, profile, preferences, project, role)
+                    if result is not None:
+                        results.append(result)
+            results.sort(key=lambda item: (-item.score, item.targetId))
+            context = f"user:{requester_id}"
+            return page_snapshot(
+                self.match_snapshots, context, results, limit, cursor, viewer_user_id=requester_id
+            )
+
+    def record_recommendation_impressions(
+        self, requester_id: str, payload: RecommendationImpressionRequest
+    ) -> list[RecommendationImpressionData]:
+        with self._lock:
+            snapshot = self.match_snapshots.get(payload.recommendationRequestId)
+            if snapshot is None or snapshot.viewer_user_id != requester_id:
+                raise ServiceError("RECOMMENDATION_REQUEST_INVALID", "推荐请求不存在或不可见。", 422)
+            now = now_utc()
+            if snapshot.expires_at <= now:
+                self.match_snapshots.pop(payload.recommendationRequestId, None)
+                raise ServiceError("RECOMMENDATION_EXPIRED", "推荐请求已过期，请重新加载。", 410)
+            occurred_at = validate_impression_time(payload.occurredAt, now)
+            candidates = {
+                (result.targetType, result.targetId): result for result in snapshot.results
+            }
+            for item in payload.items:
+                if (item.targetType, item.targetId) not in candidates:
+                    raise ServiceError("INVALID_RECOMMENDATION_TARGET", "曝光候选不属于该推荐请求。", 422)
+                if not self._impression_target_is_currently_valid(
+                    requester_id, snapshot.context, item.targetType, item.targetId
+                ):
+                    raise ServiceError("INVALID_RECOMMENDATION_TARGET", "曝光候选当前已不可见。", 422)
+                key = (payload.recommendationRequestId, requester_id, item.targetType, item.targetId)
+                existing = self.recommendation_impressions.get(key)
+                if existing is not None and existing.position != item.position:
+                    raise ServiceError("IMPRESSION_CONFLICT", "同一候选的曝光位置不能变更。", 409)
+            recorded: list[RecommendationImpressionData] = []
+            for item in payload.items:
+                key = (payload.recommendationRequestId, requester_id, item.targetType, item.targetId)
+                existing = self.recommendation_impressions.get(key)
+                if existing is not None:
+                    recorded.append(existing.model_copy(update={"duplicate": True}))
+                    continue
+                impression = RecommendationImpressionData(
+                    recommendationRequestId=payload.recommendationRequestId,
+                    targetType=item.targetType,
+                    targetId=item.targetId,
+                    position=item.position,
+                    recordedAt=now,
+                    duplicate=False,
+                )
+                self.recommendation_impressions[key] = impression
+                recorded.append(impression)
+            return [item.model_copy(deep=True) for item in recorded]
+
+    def _impression_target_is_currently_valid(
+        self, requester_id: str, context: str, target_type: str, target_id: str
+    ) -> bool:
+        parts = context.split(":")
+        if parts[0] == "project" and len(parts) == 4 and target_type == "PROFILE":
+            _, owner_id, project_id, role_id = parts
+            project = self.projects.get(project_id)
+            role = next((item for item in project.roles if item.id == role_id), None) if project else None
+            profile = self.profiles.get(target_id)
+            return bool(
+                owner_id == requester_id
+                and project is not None
+                and project.status == "PUBLISHED"
+                and role is not None
+                and role.status == "OPEN"
+                and role.remainingCount > 0
+                and profile is not None
+                and self.user_statuses.get(target_id) == "ACTIVE"
+                and profile.visibility
+                and target_id != requester_id
+                and not self.users_blocked(requester_id, target_id)
+                and not any(
+                    member.projectId == project_id
+                    and member.userId == target_id
+                    and member.status == "ACTIVE"
+                    for member in self.project_members.values()
+                )
+            )
+        if parts[0] == "user" and len(parts) == 2 and target_type == "PROJECT_ROLE":
+            project_role_id = target_id
+            for project in self.projects.values():
+                role = next((item for item in project.roles if item.id == project_role_id), None)
+                if role is None:
+                    continue
+                return bool(
+                    project.status == "PUBLISHED"
+                    and self.user_statuses.get(project.ownerId) == "ACTIVE"
+                    and role.status == "OPEN"
+                    and role.remainingCount > 0
+                    and project.ownerId != requester_id
+                    and not self.users_blocked(requester_id, project.ownerId)
+                    and not any(
+                        member.projectId == project.id
+                        and member.userId == requester_id
+                        and member.status == "ACTIVE"
+                        for member in self.project_members.values()
+                    )
+                )
+        return False
+
+    def create_report(self, reporter_id: str, payload: ReportRequest, request_id: str) -> ReportData:
+        with self._lock:
+            for report in self.reports.values():
+                if (
+                    report.status == "PENDING"
+                    and report.targetType == payload.targetType
+                    and report.targetId == payload.targetId
+                    and report.reason == payload.reason
+                    and self.report_reporters.get(report.id) == reporter_id
+                ):
+                    return deepcopy(report)
+            if not self._report_target_is_visible(reporter_id, payload.targetType, payload.targetId):
+                raise ServiceError("RESOURCE_NOT_FOUND", "举报目标不存在或不可见。", 404)
+            report = ReportData(
+                id=f"rpt_{uuid4().hex}",
+                targetType=payload.targetType,
+                targetId=payload.targetId,
+                reason=payload.reason,
+                status="PENDING",
+                createdAt=now_utc(),
+            )
+            self.reports[report.id] = report
+            self.report_reporters[report.id] = reporter_id
+            self.report_descriptions[report.id] = payload.description
+            self._append_audit_event(
+                reporter_id, "REPORT_SUBMITTED", "REPORT", report.id, request_id
+            )
+            return deepcopy(report)
+
+    def _append_audit_event(
+        self, actor_user_id: str, action: str, resource_type: str, resource_id: str, request_id: str
+    ) -> None:
+        self.audit_events.append(
+            {
+                "id": f"aud_{uuid4().hex}",
+                "actorUserId": actor_user_id,
+                "action": action,
+                "resourceType": resource_type,
+                "resourceId": resource_id,
+                "requestId": request_id,
+                "outcome": "SUCCESS",
+                "createdAt": now_utc(),
+            }
+        )
+
+    def _report_target_is_visible(self, reporter_id: str, target_type: str, target_id: str) -> bool:
+        if target_type == "USER":
+            return (
+                target_id != reporter_id
+                and target_id in self.users_by_subject.values()
+                and self.user_statuses.get(target_id, "ACTIVE") == "ACTIVE"
+            )
+        if target_type == "PROJECT":
+            project = self.projects.get(target_id)
+            return bool(
+                project is not None
+                and project.status == "PUBLISHED"
+                and project.ownerId != reporter_id
+                and self.user_statuses.get(project.ownerId, "ACTIVE") == "ACTIVE"
+            )
+        if target_type == "MESSAGE":
+            message = self.messages.get(target_id)
+            conversation = self.conversations.get(message.conversationId) if message else None
+            return bool(
+                conversation is not None
+                and reporter_id in conversation.participantUserIds
+                and message.senderUserId != reporter_id
+            )
+        return False
 
     @staticmethod
     def _require_owner(project: ProjectData | None, user_id: str) -> None:
@@ -636,3 +1051,17 @@ class MemoryStore:
             "filledCount": existing.filledCount if existing else 0,
             "remainingCount": role.headcount - (existing.filledCount if existing else 0),
         }
+
+    @staticmethod
+    def _public_profile_data(user_id: str, profile: ProfileData) -> PublicProfileData:
+        return PublicProfileData.model_validate({"id": user_id, **profile.model_dump(exclude={"version"})})
+
+    @staticmethod
+    def _cursor_start(items: list[object], cursor: str | None) -> int:
+        if not cursor:
+            return 0
+        item_id = cursor
+        ids = [getattr(item, "id", None) for item in items]
+        if item_id not in ids:
+            raise ServiceError("VALIDATION_ERROR", "分页游标无效。", 422)
+        return ids.index(item_id) + 1

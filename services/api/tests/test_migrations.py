@@ -26,6 +26,12 @@ EXPECTED_TABLES = {
     "conversations",
     "conversation_participants",
     "messages",
+    "recommendation_requests",
+    "recommendation_candidates",
+    "recommendation_impressions",
+    "reports",
+    "account_deletion_requests",
+    "audit_events",
 }
 
 

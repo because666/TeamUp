@@ -83,6 +83,12 @@ class LogoutData(BaseModel):
     loggedOut: bool
 
 
+class AccountDeletionRequestData(BaseModel):
+    id: str
+    status: Literal["PENDING", "CANCELLED", "COMPLETED"]
+    requestedAt: datetime
+
+
 class BlockRequest(BaseModel):
     blockedUserId: str = Field(min_length=1, max_length=64)
 
@@ -95,6 +101,27 @@ class BlockData(BaseModel):
 class UnblockData(BaseModel):
     blockedUserId: str
     removed: bool
+
+
+class ReportRequest(BaseModel):
+    targetType: Literal["USER", "PROJECT", "MESSAGE"]
+    targetId: str = Field(min_length=1, max_length=64)
+    reason: Literal["SPAM", "HARASSMENT", "FRAUD", "INAPPROPRIATE_CONTENT", "OTHER"]
+    description: str = Field(default="", max_length=500)
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def strip_description(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
+
+
+class ReportData(BaseModel):
+    id: str
+    targetType: Literal["USER", "PROJECT", "MESSAGE"]
+    targetId: str
+    reason: Literal["SPAM", "HARASSMENT", "FRAUD", "INAPPROPRIATE_CONTENT", "OTHER"]
+    status: Literal["PENDING", "REVIEWED", "DISMISSED", "ACTIONED"]
+    createdAt: datetime
 
 
 class InvitationCreateRequest(BaseModel):
@@ -153,6 +180,20 @@ class ProfileData(ProfilePayload):
     updatedAt: datetime
 
 
+class PublicProfileData(BaseModel):
+    id: str
+    nickname: str
+    school: str
+    major: str
+    grade: str
+    skills: list[str]
+    collaborationScenarios: list[str]
+    rolePreference: RolePreference
+    hoursPerWeek: int = Field(ge=1, le=40)
+    bio: str = ""
+    updatedAt: datetime
+
+
 class ProfileUpdate(ProfilePayload):
     version: int = Field(default=0, ge=0)
 
@@ -179,6 +220,51 @@ class MatchPreferencesUpdate(MatchPreferencesPayload):
 class MatchPreferencesData(MatchPreferencesPayload):
     version: int = Field(ge=1)
     updatedAt: datetime
+
+
+class MatchResultData(BaseModel):
+    targetType: Literal["PROFILE", "PROJECT_ROLE"]
+    targetId: str
+    targetSummary: dict[str, object]
+    score: int = Field(ge=0, le=100)
+    confidence: float = Field(ge=0, le=1)
+    informationSufficient: bool
+    engineType: Literal["RULE", "ML_RANKER"]
+    engineVersion: str
+    modelVersion: str | None = None
+    factors: list[dict[str, object]]
+    missingInformation: list[str]
+
+
+class RecommendationImpressionItem(BaseModel):
+    targetType: Literal["PROFILE", "PROJECT_ROLE"]
+    targetId: str = Field(min_length=1, max_length=64)
+    position: int = Field(ge=1, le=50)
+
+
+class RecommendationImpressionRequest(BaseModel):
+    recommendationRequestId: str = Field(min_length=5, max_length=128)
+    items: list[RecommendationImpressionItem] = Field(min_length=1, max_length=50)
+    occurredAt: datetime
+
+    @model_validator(mode="after")
+    def validate_positions(self):
+        positions = [item.position for item in self.items]
+        if len(set(positions)) != len(positions):
+            raise ValueError("items positions must be unique")
+        targets = [(item.targetType, item.targetId) for item in self.items]
+        if len(set(targets)) != len(targets):
+            raise ValueError("items targets must be unique")
+        return self
+
+
+class RecommendationImpressionData(BaseModel):
+    recommendationRequestId: str
+    targetType: Literal["PROFILE", "PROJECT_ROLE"]
+    targetId: str
+    position: int
+    recordedAt: datetime
+    duplicate: bool = False
 
 
 class RolePayload(BaseModel):

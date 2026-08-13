@@ -11,6 +11,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from .db_models import (
+    AccountDeletionRequestRow,
+    AuditEventRow,
     BlockRow,
     ConversationParticipantRow,
     ConversationRow,
@@ -28,11 +30,16 @@ from .db_models import (
     ProjectRoleSkillRow,
     ProjectRow,
     ProjectScenarioRow,
+    RecommendationCandidateRow,
+    RecommendationImpressionRow,
+    RecommendationRequestRow,
+    ReportRow,
     SessionRow,
     UserRow,
 )
 from .errors import ServiceError
 from .schemas import (
+    AccountDeletionRequestData,
     BlockData,
     ConversationData,
     InvitationAcceptData,
@@ -41,12 +48,26 @@ from .schemas import (
     MatchPreferencesData,
     MatchPreferencesPayload,
     ProfileData,
+    PublicProfileData,
+    MatchResultData,
     ProfilePayload,
     ProjectData,
     ProjectMemberData,
     ProjectPayload,
     ProjectUpdate,
     RoleData,
+    RecommendationImpressionData,
+    RecommendationImpressionRequest,
+    ReportData,
+    ReportRequest,
+)
+from .matching_service import (
+    MATCH_SNAPSHOT_TTL,
+    MatchSnapshot,
+    build_profile_match,
+    build_project_match,
+    page_snapshot,
+    validate_impression_time,
 )
 
 
@@ -68,6 +89,7 @@ class SqlAlchemyStore:
     def __init__(self, session_factory: sessionmaker[Session], engine: Engine) -> None:
         self._session_factory = session_factory
         self._engine = engine
+        self._match_snapshots: dict[str, MatchSnapshot] = {}
 
     def ready(self) -> bool:
         try:
@@ -133,11 +155,61 @@ class SqlAlchemyStore:
                 raise ServiceError("SESSION_EXPIRED", "登录状态已失效，请重新登录。", 401)
             return row.user_id
 
-    def logout(self, token: str) -> None:
+    def logout(self, token: str, request_id: str = "req_unknown") -> None:
         with self._session_factory.begin() as session:
             row = session.scalar(select(SessionRow).where(SessionRow.token_digest == token_digest(token)).with_for_update())
             if row is not None and row.revoked_at is None:
                 row.revoked_at = db_now()
+                self._add_audit_event(session, row.user_id, "LOGOUT", "SESSION", row.id, request_id)
+
+    def request_account_deletion(self, user_id: str, request_id: str) -> AccountDeletionRequestData:
+        with self._session_factory.begin() as session:
+            user = session.scalar(select(UserRow).where(UserRow.id == user_id).with_for_update())
+            if user is None:
+                raise ServiceError("SESSION_EXPIRED", "登录状态已失效，请重新登录。", 401)
+            existing = session.scalar(
+                select(AccountDeletionRequestRow)
+                .where(AccountDeletionRequestRow.pending_user_id == user_id)
+                .with_for_update()
+            )
+            if existing is not None:
+                return self._account_deletion_request_data(existing)
+            if user.status != "ACTIVE":
+                raise ServiceError("ACCOUNT_NOT_ACTIVE", "当前账号状态不允许申请注销。", 409)
+            timestamp = db_now()
+            row = AccountDeletionRequestRow(
+                id=f"adrq_{uuid4().hex}",
+                user_id=user_id,
+                status="PENDING",
+                pending_user_id=user_id,
+                requested_at=timestamp,
+                resolved_at=None,
+            )
+            session.add(row)
+            user.status = "DELETION_PENDING"
+            user.updated_at = timestamp
+            for active_session in session.scalars(
+                select(SessionRow).where(SessionRow.user_id == user_id, SessionRow.revoked_at.is_(None))
+            ):
+                active_session.revoked_at = timestamp
+            session.flush()
+            self._add_audit_event(
+                session,
+                user_id,
+                "ACCOUNT_DELETION_REQUESTED",
+                "ACCOUNT_DELETION_REQUEST",
+                row.id,
+                request_id,
+            )
+            return self._account_deletion_request_data(row)
+
+    @staticmethod
+    def _account_deletion_request_data(row: AccountDeletionRequestRow) -> AccountDeletionRequestData:
+        return AccountDeletionRequestData(
+            id=row.id,
+            status=row.status,
+            requestedAt=api_datetime(row.requested_at),
+        )
 
     def create_block(self, blocker_id: str, blocked_id: str) -> BlockData:
         if blocker_id == blocked_id:
@@ -172,6 +244,111 @@ class SqlAlchemyStore:
     def users_blocked(self, first_user_id: str, second_user_id: str) -> bool:
         with self._session_factory() as session:
             return self._users_blocked(session, first_user_id, second_user_id)
+
+    def create_report(self, reporter_id: str, payload: ReportRequest, request_id: str) -> ReportData:
+        with self._session_factory.begin() as session:
+            reporter = session.scalar(
+                select(UserRow)
+                .where(UserRow.id == reporter_id, UserRow.status == "ACTIVE")
+                .with_for_update()
+            )
+            if reporter is None:
+                raise ServiceError("SESSION_EXPIRED", "登录状态已失效，请重新登录。", 401)
+            pending_key = f"{reporter_id}:{payload.targetType}:{payload.targetId}:{payload.reason}"
+            existing = session.scalar(
+                select(ReportRow).where(ReportRow.pending_key == pending_key).with_for_update()
+            )
+            if existing is not None:
+                return self._report_data(existing)
+            if not self._report_target_is_visible(session, reporter_id, payload.targetType, payload.targetId):
+                raise ServiceError("RESOURCE_NOT_FOUND", "举报目标不存在或不可见。", 404)
+            row = ReportRow(
+                id=f"rpt_{uuid4().hex}",
+                reporter_id=reporter_id,
+                target_type=payload.targetType,
+                target_id=payload.targetId,
+                reason=payload.reason,
+                description=payload.description,
+                status="PENDING",
+                pending_key=pending_key,
+                created_at=db_now(),
+            )
+            session.add(row)
+            session.flush()
+            self._add_audit_event(
+                session, reporter_id, "REPORT_SUBMITTED", "REPORT", row.id, request_id
+            )
+            return self._report_data(row)
+
+    @staticmethod
+    def _add_audit_event(
+        session: Session,
+        actor_user_id: str,
+        action: str,
+        resource_type: str,
+        resource_id: str,
+        request_id: str,
+    ) -> None:
+        session.add(
+            AuditEventRow(
+                id=f"aud_{uuid4().hex}",
+                actor_user_id=actor_user_id,
+                action=action,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                request_id=request_id,
+                outcome="SUCCESS",
+                created_at=db_now(),
+            )
+        )
+
+    @staticmethod
+    def _report_data(row: ReportRow) -> ReportData:
+        return ReportData(
+            id=row.id,
+            targetType=row.target_type,
+            targetId=row.target_id,
+            reason=row.reason,
+            status=row.status,
+            createdAt=api_datetime(row.created_at),
+        )
+
+    @staticmethod
+    def _report_target_is_visible(
+        session: Session, reporter_id: str, target_type: str, target_id: str
+    ) -> bool:
+        if target_type == "USER":
+            return session.scalar(
+                select(UserRow.id).where(
+                    UserRow.id == target_id,
+                    UserRow.id != reporter_id,
+                    UserRow.status == "ACTIVE",
+                )
+            ) is not None
+        if target_type == "PROJECT":
+            return session.scalar(
+                select(ProjectRow.id)
+                .join(UserRow, UserRow.id == ProjectRow.owner_id)
+                .where(
+                    ProjectRow.id == target_id,
+                    ProjectRow.owner_id != reporter_id,
+                    ProjectRow.status == "PUBLISHED",
+                    UserRow.status == "ACTIVE",
+                )
+            ) is not None
+        if target_type == "MESSAGE":
+            message = session.scalar(select(MessageRow).where(MessageRow.id == target_id))
+            if message is None:
+                return False
+            participant = session.scalar(
+                select(ConversationParticipantRow.user_id).where(
+                    ConversationParticipantRow.conversation_id == message.conversation_id,
+                    ConversationParticipantRow.user_id == reporter_id,
+                    ConversationParticipantRow.status == "ACTIVE",
+                )
+            )
+            return participant is not None and message.sender_id != reporter_id
+        return False
 
     def create_invitation(
         self, inviter_id: str, project_id: str, role_id: str, invitee_id: str
@@ -513,6 +690,55 @@ class SqlAlchemyStore:
             row = session.scalar(self._profile_query().where(ProfileRow.user_id == user_id))
             return self._profile_data(row) if row else None
 
+    def get_public_profile(self, requester_id: str, user_id: str) -> PublicProfileData:
+        with self._session_factory() as session:
+            if requester_id == user_id:
+                raise ServiceError("RESOURCE_NOT_FOUND", "公开名片不存在或不可见。", 404)
+            user = session.scalar(select(UserRow).where(UserRow.id == user_id, UserRow.status == "ACTIVE"))
+            row = session.scalar(self._profile_query().where(ProfileRow.user_id == user_id, ProfileRow.visibility.is_(True)))
+            if user is None or row is None or self._users_blocked(session, requester_id, user_id):
+                raise ServiceError("RESOURCE_NOT_FOUND", "公开名片不存在或不可见。", 404)
+            return self._public_profile_data(user_id, row)
+
+    def list_public_profiles(
+        self,
+        requester_id: str,
+        limit: int,
+        cursor: str | None,
+        skill: str | None,
+        direction: str | None,
+        collaboration_role: str | None,
+        min_hours_per_week: int | None,
+        max_hours_per_week: int | None,
+    ) -> tuple[list[PublicProfileData], str | None]:
+        with self._session_factory() as session:
+            query = self._profile_query().join(UserRow, UserRow.id == ProfileRow.user_id).where(
+                ProfileRow.visibility.is_(True), UserRow.status == "ACTIVE", ProfileRow.user_id != requester_id
+            )
+            if skill:
+                query = query.join(ProfileSkillRow, ProfileSkillRow.user_id == ProfileRow.user_id).where(
+                    func.lower(ProfileSkillRow.skill_name) == skill.casefold()
+                )
+            if direction:
+                query = query.join(MatchPreferenceRow, MatchPreferenceRow.user_id == ProfileRow.user_id).join(
+                    MatchPreferenceDirectionRow, MatchPreferenceDirectionRow.user_id == MatchPreferenceRow.user_id
+                ).where(func.lower(MatchPreferenceDirectionRow.direction_code) == direction.casefold())
+            if collaboration_role:
+                query = query.where(ProfileRow.role_preference == collaboration_role)
+            if min_hours_per_week is not None:
+                query = query.where(ProfileRow.hours_per_week >= min_hours_per_week)
+            if max_hours_per_week is not None:
+                query = query.where(ProfileRow.hours_per_week <= max_hours_per_week)
+            rows = [row for row in session.scalars(query).unique() if not self._users_blocked(session, requester_id, row.user_id)]
+            rows.sort(key=lambda row: (row.updated_at, row.user_id), reverse=True)
+            ids = [row.user_id for row in rows]
+            if cursor:
+                if cursor not in ids:
+                    raise ServiceError("VALIDATION_ERROR", "分页游标无效。", 422)
+                rows = rows[ids.index(cursor) + 1 :]
+            page = rows[:limit]
+            return [self._public_profile_data(row.user_id, row) for row in page], page[-1].user_id if len(rows) > limit and page else None
+
     def save_profile(self, user_id: str, payload: ProfilePayload, version: int | None) -> ProfileData:
         with self._session_factory.begin() as session:
             user = session.scalar(select(UserRow).where(UserRow.id == user_id).with_for_update())
@@ -597,11 +823,21 @@ class SqlAlchemyStore:
             session.flush()
             return self._project_data(row)
 
-    def get_project(self, project_id: str) -> ProjectData:
+    def get_project(self, project_id: str, requester_id: str | None = None) -> ProjectData:
         with self._session_factory() as session:
             row = session.scalar(self._project_query().where(ProjectRow.id == project_id))
             if row is None:
                 raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可见。", 404)
+            if requester_id is not None and row.owner_id != requester_id:
+                owner = session.scalar(
+                    select(UserRow).where(UserRow.id == row.owner_id, UserRow.status == "ACTIVE")
+                )
+                if (
+                    row.status == "DRAFT"
+                    or owner is None
+                    or self._users_blocked(session, requester_id, row.owner_id)
+                ):
+                    raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可见。", 404)
             return self._project_data(row)
 
     def update_project(self, user_id: str, project_id: str, payload: ProjectUpdate) -> ProjectData:
@@ -737,10 +973,40 @@ class SqlAlchemyStore:
                 for member in sorted(active_members, key=lambda item: (item.joined_at, item.id))
             ]
 
-    def list_projects(self, status: str, limit: int, cursor: str | None) -> tuple[list[ProjectData], str | None]:
+    def list_projects(
+        self,
+        status: str,
+        limit: int,
+        cursor: str | None,
+        direction: str | None = None,
+        competition: str | None = None,
+        stage: str | None = None,
+        skill: str | None = None,
+        requester_id: str | None = None,
+    ) -> tuple[list[ProjectData], str | None]:
         with self._session_factory() as session:
             sort_time = func.coalesce(ProjectRow.published_at, ProjectRow.created_at)
-            query = self._project_query().where(ProjectRow.status == status)
+            query = self._project_query().join(UserRow, UserRow.id == ProjectRow.owner_id).where(
+                ProjectRow.status == status, UserRow.status == "ACTIVE"
+            )
+            if requester_id:
+                blocked_owner = select(BlockRow.blocker_id).where(
+                    or_(
+                        (BlockRow.blocker_id == requester_id) & (BlockRow.blocked_id == ProjectRow.owner_id),
+                        (BlockRow.blocker_id == ProjectRow.owner_id) & (BlockRow.blocked_id == requester_id),
+                    )
+                ).exists()
+                query = query.where(~blocked_owner)
+            if direction:
+                query = query.where(func.lower(ProjectRow.direction) == direction.casefold())
+            if competition:
+                query = query.where(func.lower(ProjectRow.competition) == competition.casefold())
+            if stage:
+                query = query.where(func.lower(ProjectRow.stage) == stage.casefold())
+            if skill:
+                query = query.join(ProjectRoleRow, ProjectRoleRow.project_id == ProjectRow.id).join(
+                    ProjectRoleSkillRow, ProjectRoleSkillRow.role_id == ProjectRoleRow.id
+                ).where(func.lower(ProjectRoleSkillRow.skill_name) == skill.casefold())
             if cursor:
                 cursor_row = session.scalar(select(ProjectRow).where(ProjectRow.id == cursor))
                 if cursor_row is None or cursor_row.status != status:
@@ -753,6 +1019,296 @@ class SqlAlchemyStore:
             has_more = len(rows) > limit
             page = rows[:limit]
             return [self._project_data(row) for row in page], (page[-1].id if has_more and page else None)
+
+    def list_my_projects(
+        self, user_id: str, status: str | None, limit: int, cursor: str | None
+    ) -> tuple[list[ProjectData], str | None]:
+        with self._session_factory() as session:
+            query = self._project_query().where(ProjectRow.owner_id == user_id)
+            if status:
+                query = query.where(ProjectRow.status == status)
+            rows = list(session.scalars(query).unique())
+            rows.sort(key=lambda row: (row.updated_at, row.id), reverse=True)
+            ids = [row.id for row in rows]
+            if cursor:
+                if cursor not in ids:
+                    raise ServiceError("VALIDATION_ERROR", "分页游标无效。", 422)
+                rows = rows[ids.index(cursor) + 1 :]
+            page = rows[:limit]
+            return [self._project_data(row) for row in page], page[-1].id if len(rows) > limit and page else None
+
+    def project_matches(
+        self, requester_id: str, project_id: str, role_id: str, limit: int, cursor: str | None
+    ) -> tuple[list[MatchResultData], str | None, str]:
+        with self._session_factory() as session:
+            project = session.scalar(self._project_query().where(ProjectRow.id == project_id))
+            if project is None:
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可见。", 404)
+            if project.owner_id != requester_id:
+                raise ServiceError("FORBIDDEN", "你没有权限查看该项目匹配。", 403)
+            if project.status != "PUBLISHED":
+                raise ServiceError("PROJECT_NOT_MATCHABLE", "项目当前状态不允许匹配。", 409)
+            role = next((item for item in project.roles if item.id == role_id), None)
+            if role is None:
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目或岗位不存在。", 404)
+            project_data = self._project_data(project)
+            role_data = next(item for item in project_data.roles if item.id == role_id)
+            if role_data.status != "OPEN" or role_data.remainingCount <= 0:
+                raise ServiceError("PROJECT_NOT_MATCHABLE", "岗位当前不允许匹配。", 409)
+            results: list[MatchResultData] = []
+            member_ids = {
+                item.user_id for item in project.members if item.project_id == project_id and item.status == "ACTIVE"
+            }
+            profiles = list(session.scalars(self._profile_query().join(UserRow, UserRow.id == ProfileRow.user_id).where(
+                ProfileRow.visibility.is_(True), UserRow.status == "ACTIVE"
+            )).unique())
+            for profile_row in profiles:
+                candidate_id = profile_row.user_id
+                if candidate_id == requester_id or candidate_id in member_ids or self._users_blocked(session, requester_id, candidate_id):
+                    continue
+                profile = self._profile_data(profile_row)
+                preferences_row = session.scalar(self._match_preferences_query().where(MatchPreferenceRow.user_id == candidate_id))
+                preferences = self._match_preferences_data(preferences_row) if preferences_row else None
+                result = build_profile_match(project_data, role_data, candidate_id, profile, preferences)
+                if result is not None:
+                    results.append(result)
+            results.sort(key=lambda item: (-item.score, item.targetId))
+            context = f"project:{requester_id}:{project_id}:{role_id}"
+            page, next_cursor, request_id = page_snapshot(
+                self._match_snapshots, context, results, limit, cursor, viewer_user_id=requester_id
+            )
+            if cursor is None:
+                self._persist_recommendation_snapshot(session, requester_id, context, request_id, results)
+            session.commit()
+            return page, next_cursor, request_id
+
+    def user_project_matches(
+        self, requester_id: str, limit: int, cursor: str | None
+    ) -> tuple[list[MatchResultData], str | None, str]:
+        with self._session_factory() as session:
+            profile_row = session.scalar(self._profile_query().where(ProfileRow.user_id == requester_id))
+            if profile_row is None:
+                raise ServiceError("MATCH_PROFILE_INCOMPLETE", "请先完成能力名片后再匹配。", 409)
+            preferences_row = session.scalar(self._match_preferences_query().where(MatchPreferenceRow.user_id == requester_id))
+            if preferences_row is None:
+                raise ServiceError("MATCH_PROFILE_INCOMPLETE", "请先完善匹配偏好后再匹配。", 409)
+            profile = self._profile_data(profile_row)
+            preferences = self._match_preferences_data(preferences_row)
+            results: list[MatchResultData] = []
+            projects = list(
+                session.scalars(
+                    self._project_query()
+                    .join(UserRow, UserRow.id == ProjectRow.owner_id)
+                    .where(ProjectRow.status == "PUBLISHED", UserRow.status == "ACTIVE")
+                ).unique()
+            )
+            for project in projects:
+                if project.owner_id == requester_id or self._users_blocked(session, requester_id, project.owner_id):
+                    continue
+                project_data = self._project_data(project)
+                if any(item.user_id == requester_id and item.status == "ACTIVE" for item in project.members):
+                    continue
+                for role in project_data.roles:
+                    result = build_project_match(requester_id, profile, preferences, project_data, role)
+                    if result is not None:
+                        results.append(result)
+            results.sort(key=lambda item: (-item.score, item.targetId))
+            context = f"user:{requester_id}"
+            page, next_cursor, request_id = page_snapshot(
+                self._match_snapshots, context, results, limit, cursor, viewer_user_id=requester_id
+            )
+            if cursor is None:
+                self._persist_recommendation_snapshot(session, requester_id, context, request_id, results)
+            session.commit()
+            return page, next_cursor, request_id
+
+    def record_recommendation_impressions(
+        self, requester_id: str, payload: RecommendationImpressionRequest
+    ) -> list[RecommendationImpressionData]:
+        with self._session_factory.begin() as session:
+            request_row = session.scalar(
+                select(RecommendationRequestRow)
+                .where(RecommendationRequestRow.id == payload.recommendationRequestId)
+                .with_for_update()
+            )
+            if request_row is None or request_row.viewer_user_id != requester_id:
+                raise ServiceError("RECOMMENDATION_REQUEST_INVALID", "推荐请求不存在或不可见。", 422)
+            now = db_now()
+            if request_row.expires_at <= now:
+                raise ServiceError("RECOMMENDATION_EXPIRED", "推荐请求已过期，请重新加载。", 410)
+            occurred_at = validate_impression_time(payload.occurredAt, now.replace(tzinfo=UTC))
+            candidates = {
+                (row.target_type, row.target_id)
+                for row in session.scalars(
+                    select(RecommendationCandidateRow).where(
+                        RecommendationCandidateRow.request_id == payload.recommendationRequestId
+                    )
+                )
+            }
+            for item in payload.items:
+                if (item.targetType, item.targetId) not in candidates:
+                    raise ServiceError("INVALID_RECOMMENDATION_TARGET", "曝光候选不属于该推荐请求。", 422)
+                if not self._impression_target_is_currently_valid(
+                    session, requester_id, request_row.context, item.targetType, item.targetId
+                ):
+                    raise ServiceError("INVALID_RECOMMENDATION_TARGET", "曝光候选当前已不可见。", 422)
+            existing_rows = {
+                (row.target_type, row.target_id): row
+                for row in session.scalars(
+                    select(RecommendationImpressionRow).where(
+                        RecommendationImpressionRow.request_id == payload.recommendationRequestId,
+                        RecommendationImpressionRow.viewer_user_id == requester_id,
+                    )
+                )
+            }
+            for item in payload.items:
+                existing = existing_rows.get((item.targetType, item.targetId))
+                if existing is not None and existing.position != item.position:
+                    raise ServiceError("IMPRESSION_CONFLICT", "同一候选的曝光位置不能变更。", 409)
+            recorded: list[RecommendationImpressionData] = []
+            for item in payload.items:
+                existing = existing_rows.get((item.targetType, item.targetId))
+                if existing is not None:
+                    recorded.append(
+                        RecommendationImpressionData(
+                            recommendationRequestId=payload.recommendationRequestId,
+                            targetType=item.targetType,
+                            targetId=item.targetId,
+                            position=existing.position,
+                            recordedAt=api_datetime(existing.received_at),
+                            duplicate=True,
+                        )
+                    )
+                    continue
+                row = RecommendationImpressionRow(
+                    id=f"rim_{uuid4().hex}",
+                    request_id=payload.recommendationRequestId,
+                    viewer_user_id=requester_id,
+                    target_type=item.targetType,
+                    target_id=item.targetId,
+                    position=item.position,
+                    client_occurred_at=occurred_at.replace(tzinfo=None),
+                    received_at=now,
+                )
+                session.add(row)
+                recorded.append(
+                    RecommendationImpressionData(
+                        recommendationRequestId=payload.recommendationRequestId,
+                        targetType=item.targetType,
+                        targetId=item.targetId,
+                        position=item.position,
+                        recordedAt=api_datetime(now),
+                        duplicate=False,
+                    )
+                )
+            session.flush()
+            return recorded
+
+    @staticmethod
+    def _persist_recommendation_snapshot(
+        session: Session,
+        requester_id: str,
+        context: str,
+        request_id: str,
+        results: list[MatchResultData],
+    ) -> None:
+        timestamp = db_now()
+        session.add(
+            RecommendationRequestRow(
+                id=request_id,
+                viewer_user_id=requester_id,
+                context=context,
+                expires_at=timestamp + MATCH_SNAPSHOT_TTL,
+                created_at=timestamp,
+            )
+        )
+        # These rows use scalar foreign keys rather than ORM relationships, so
+        # SQLAlchemy cannot infer the parent-before-child insert dependency.
+        session.flush()
+        session.add_all(
+            RecommendationCandidateRow(
+                id=f"rc_{uuid4().hex}",
+                request_id=request_id,
+                rank=rank,
+                target_type=result.targetType,
+                target_id=result.targetId,
+            )
+            for rank, result in enumerate(results, start=1)
+        )
+
+    def _impression_target_is_currently_valid(
+        self,
+        session: Session,
+        requester_id: str,
+        context: str,
+        target_type: str,
+        target_id: str,
+    ) -> bool:
+        parts = context.split(":")
+        if parts[0] == "project" and len(parts) == 4 and target_type == "PROFILE":
+            _, owner_id, project_id, role_id = parts
+            project = session.scalar(select(ProjectRow).where(ProjectRow.id == project_id))
+            role = session.scalar(
+                select(ProjectRoleRow).where(ProjectRoleRow.project_id == project_id, ProjectRoleRow.id == role_id)
+            )
+            profile = session.scalar(
+                select(ProfileRow)
+                .join(UserRow, UserRow.id == ProfileRow.user_id)
+                .where(
+                    ProfileRow.user_id == target_id,
+                    ProfileRow.visibility.is_(True),
+                    UserRow.status == "ACTIVE",
+                )
+            )
+            member = self._active_member(session, project_id, target_id)
+            filled_count = session.scalar(
+                select(func.count(ProjectMemberRow.id)).where(
+                    ProjectMemberRow.role_id == role_id, ProjectMemberRow.status == "ACTIVE"
+                )
+            )
+            return bool(
+                owner_id == requester_id
+                and project is not None
+                and project.status == "PUBLISHED"
+                and role is not None
+                and role.status == "OPEN"
+                and (filled_count or 0) < role.headcount
+                and profile is not None
+                and target_id != requester_id
+                and member is None
+                and not self._users_blocked(session, requester_id, target_id)
+            )
+        if parts[0] == "user" and len(parts) == 2 and target_type == "PROJECT_ROLE":
+            role = session.scalar(select(ProjectRoleRow).where(ProjectRoleRow.id == target_id))
+            if role is None:
+                return False
+            project = session.scalar(select(ProjectRow).where(ProjectRow.id == role.project_id))
+            owner_active = (
+                session.scalar(
+                    select(UserRow.id).where(
+                        UserRow.id == project.owner_id,
+                        UserRow.status == "ACTIVE",
+                    )
+                )
+                if project is not None
+                else None
+            )
+            filled_count = session.scalar(
+                select(func.count(ProjectMemberRow.id)).where(
+                    ProjectMemberRow.role_id == role.id, ProjectMemberRow.status == "ACTIVE"
+                )
+            )
+            return bool(
+                project is not None
+                and owner_active is not None
+                and project.status == "PUBLISHED"
+                and role.status == "OPEN"
+                and (filled_count or 0) < role.headcount
+                and project.owner_id != requester_id
+                and self._active_member(session, project.id, requester_id) is None
+                and not self._users_blocked(session, requester_id, project.owner_id)
+            )
+        return False
 
     @staticmethod
     def _profile_query() -> Select[tuple[ProfileRow]]:
@@ -971,6 +1527,12 @@ class SqlAlchemyStore:
                 "updatedAt": api_datetime(row.updated_at),
             }
         )
+
+    @staticmethod
+    def _public_profile_data(user_id: str, row: ProfileRow) -> PublicProfileData:
+        data = SqlAlchemyStore._profile_data(row).model_dump()
+        data.pop("version", None)
+        return PublicProfileData.model_validate({"id": user_id, **data})
 
     @staticmethod
     def _match_preferences_data(row: MatchPreferenceRow) -> MatchPreferencesData:
