@@ -5,6 +5,12 @@ const PROJECT_KEY = "teamup.fixture.project.v1";
 const SESSION_KEY = "teamup.fixture.session.v1";
 const PROFILE_RECOVERY_KEY = "teamup.local.profile-recovery.v1";
 const PROJECT_RECOVERY_KEY = "teamup.local.project-recovery.v1";
+const API_SESSION_KEY = "teamup.api.session.v1";
+
+export interface ApiSession {
+  accessToken: string;
+  userId: string;
+}
 
 export const fixtureStorage = {
   isSignedIn(): boolean {
@@ -12,6 +18,9 @@ export const fixtureStorage = {
   },
   markSignedIn(): void {
     uni.setStorageSync(SESSION_KEY, "signed_in");
+  },
+  clearSession(): void {
+    uni.removeStorageSync(SESSION_KEY);
   },
   readProfile(): ProfileDraft | null {
     return (uni.getStorageSync(PROFILE_KEY) || null) as ProfileDraft | null;
@@ -45,5 +54,20 @@ export const recoveryStorage = {
   },
   clearProject(): void {
     uni.removeStorageSync(PROJECT_RECOVERY_KEY);
+  },
+};
+
+export const apiSessionStorage = {
+  read(): ApiSession | null {
+    const value = uni.getStorageSync(API_SESSION_KEY) as Partial<ApiSession> | null;
+    if (!value || typeof value.accessToken !== "string" || typeof value.userId !== "string") return null;
+    if (!value.accessToken || !value.userId) return null;
+    return { accessToken: value.accessToken, userId: value.userId };
+  },
+  write(session: ApiSession): void {
+    uni.setStorageSync(API_SESSION_KEY, session);
+  },
+  clear(): void {
+    uni.removeStorageSync(API_SESSION_KEY);
   },
 };

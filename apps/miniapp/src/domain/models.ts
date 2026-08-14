@@ -1,11 +1,15 @@
 export type ContractStatus = "PROPOSED_GAP";
 
-export interface FixtureEnvelope<T> {
+export interface ServiceEnvelope<T> {
+  requestId: string;
+  data: T;
+  meta?: Record<string, unknown>;
+}
+
+export interface FixtureEnvelope<T> extends ServiceEnvelope<T> {
   _fixture: true;
   contractStatus: ContractStatus;
   gapIds: string[];
-  requestId: string;
-  data: T;
 }
 
 export type UserState =

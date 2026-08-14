@@ -60,6 +60,15 @@ docs/
 
 ## 4. 配置
 
+### 4.1 前端 API 模式
+
+- `apps/miniapp/.env.example` 中的 `VITE_API_BASE_URL` 必须包含 `/api/v1` 前缀，例如本地 `http://127.0.0.1:8000/api/v1`；
+- 非本地地址只允许 HTTPS，本地 HTTP 只接受 `localhost` 或 `127.0.0.1`；
+- 微信小程序 API 模式使用 `npm run dev:mp-weixin:api`，登录时通过 `uni.login({ provider: "weixin" })` 获取一次性 code，再交给后端换取平台会话；
+- H5 API 模式可验证无登录接口和错误状态，但不能替代微信 code 流程，无法调用微信登录时必须显式失败；
+- 微信开发者工具和小程序后台必须把 API 域名配置为 request 合法域名，开发/生产 AppID、微信密钥和平台签名密钥不得写入前端环境文件；
+- access token 仅由 services 层读取并放入 `Authorization: Bearer`，页面不得解析 token；成功退出后清理本地平台会话。
+
 - 仓库提供 `.env.example`，只放变量名和无敏感示例；
 - 本地 `.env*`、证书、密钥和真实连接信息不得提交；
 - 客户端只能包含可公开配置，微信密钥、数据库凭证和 AI Key 只能存在服务端；
