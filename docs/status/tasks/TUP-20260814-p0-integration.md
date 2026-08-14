@@ -50,6 +50,7 @@
 | `VITE_API_BASE_URL=http://127.0.0.1:8000/api/v1 npm run build:h5` | Passed | H5 真实 API 模式生产构建通过 |
 | `VITE_API_BASE_URL=http://127.0.0.1:8000/api/v1 npm run build:mp-weixin` | Passed | 微信小程序真实 API 模式生产构建通过 |
 | `python -m pytest -ra` | Passed with skips | 74 passed；7 个真实 MySQL 用例因未配置 `TEAMUP_TEST_MYSQL_URL` 跳过 |
+| 一次性 MySQL 8.4.11 容器：`python -m alembic upgrade head` + `python -m pytest tests/test_mysql_integration.py -ra` | Passed | 迁移到 `20260813_0010 (head)`；7 项真实 MySQL 集成测试全部通过；容器已删除 |
 | `python -m compileall -q app tests` | Passed | 后端源码与测试编译通过 |
 | `python -m pip check` | Passed | `No broken requirements found` |
 | P0 OpenAPI method/path 与 typed response 检查 | Passed | 前端使用的 8 个 method/path 全部存在，8 个成功响应均有 schema |
@@ -59,6 +60,6 @@
 ## 7. 剩余风险
 
 - 真实微信 AppID、微信开发者工具、合法域名和 staging 未在当前本机提供；
-- 未配置独立 `TEAMUP_TEST_MYSQL_URL`，本次组合验证未重复执行 7 个真实 MySQL 专属用例；
+- 本次使用本机一次性 MySQL 8.4.11 容器验证，尚未连接团队远程 staging MySQL；远程 staging 的凭证、网络白名单和备份窗口仍需部署负责人提供并验收；
 - Node `v25.2.1` 可完成当前构建，但团队长期支持的 Node LTS 仍需 CI 或第二台开发机确认；
 - 角色 A 的最终 UI/产品验收仍需写入独立评审文件，集成分支不能代替该结论。
