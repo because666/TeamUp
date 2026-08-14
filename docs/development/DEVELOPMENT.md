@@ -2,58 +2,56 @@
 
 > Status: Proposed<br>
 > Owner: 角色 A / 角色 B<br>
-> Last Updated: 2026-08-11
-
-## 9. FastAPI 后端基础实现
-
-可运行后端位于 `services/api`。`local` 和 `test` 可显式使用内存存储；MySQL 适配器与 Alembic 迁移已实现，`staging` 和 `production` 禁止使用内存存储。
-
-在 `services/api` 目录执行：
-
-```powershell
-python -m pip install -e ".[test]"
-$env:TEAMUP_ENVIRONMENT = "local"
-$env:TEAMUP_ALLOW_LOCAL_LOGIN = "true"
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-```
-
-在 `services/api` 目录执行检查：
-
-```powershell
-python -m pytest
-python -m compileall -q app tests
-```
-
-本地登录约定：调用 `POST /api/v1/auth/wechat/login` 时，`code` 使用 `local:<subject>`，并将 `consentAccepted` 设为 `true`。当 `TEAMUP_ENVIRONMENT=production` 时，该替代方案自动禁用。代理端口 `7897` 仅用于网络访问，不作为服务监听端口。
-
-真实微信登录配置：在服务端环境设置 `TEAMUP_WECHAT_APP_ID`、`TEAMUP_WECHAT_APP_SECRET`，可选设置 `TEAMUP_WECHAT_SESSION_ENDPOINT`、`TEAMUP_WECHAT_TIMEOUT_SECONDS` 和 `TEAMUP_WECHAT_PROXY_URL`。本机需要通过 7897 出网时，将后者设为 `http://127.0.0.1:7897`；服务仍监听 8000。禁止将 secret 写入前端、仓库、日志或响应。真实微信 code 只能使用一次；本地测试使用 `local:<subject>`，不会调用微信。
+> Last Updated: 2026-08-14
 
 ## 1. 当前说明
 
-后端工程已在 `services/api` 初始化，并完成内存与 MySQL 8.4.11 的纵向验证；前端工程位于角色 A 的独立分支。后端基础和数据库迁移命令已在本文件记录，未实现的前端和完整生产部署命令仍保持 `TBD`，不得据此推断为已完成。
+微信小程序前端已在 `apps/miniapp` 初始化并提供 fixture 与真实 API 两种模式；FastAPI 后端已在 `services/api` 初始化，包含内存/MySQL 存储、Alembic 迁移和 OpenAPI。两端当前组合在独立集成任务分支，尚未合入 `main`。下方命令均来自工程清单并已在任务分支执行；Node LTS、真实微信环境、测试 MySQL 和生产部署仍须在对应环境复验。
 
 ## 2. 工具链登记
 
 | 范围 | 工具 | 版本来源 | 安装命令 | 启动命令 | 测试命令 | 状态 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 小程序 | UniApp | `TBD` | `TBD` | `TBD` | `TBD` | TBD |
+| 小程序 | UniApp `3.0.0-5020320260806002`、Vue `3.4.21`、TypeScript `4.9.5`、Vite `5.2.8` | `apps/miniapp/package-lock.json` | `cd apps/miniapp && npm ci` | `npm run dev:mp-weixin` | `npm test` | Ready for Review |
 | 后端 | FastAPI | `services/api/pyproject.toml` | `python -m pip install -e ".[test]"` | `python -m uvicorn app.main:app --host 127.0.0.1 --port 8000` | `python -m pytest` | Confirmed |
 | 数据库 | MySQL 8.0/8.4、SQLAlchemy、Alembic、PyMySQL | `ADR-0004`、`services/api/pyproject.toml` | 随后端依赖安装；MySQL 服务安装方式按环境确定 | `python -m alembic upgrade head` | `TEAMUP_TEST_MYSQL_URL` 配置后运行 `python -m pytest` | Confirmed |
-| API 契约 | OpenAPI | 后端清单/生成配置 | `TBD` | `TBD` | `TBD` | Proposed |
+| API 契约 | FastAPI OpenAPI | `services/api/app/main.py`、契约测试 | 随后端依赖安装 | 启动后访问 `/openapi.json` | `python -m pytest` | Ready for Review |
 
 版本必须由锁文件、wrapper 或明确的版本配置固定，不要只在聊天中约定。
 
+### 2.1 微信小程序前端命令
+
+所有命令在 `apps/miniapp/` 执行：
+
+| 目的 | 命令 | 模式 / 产物 |
+| --- | --- | --- |
+| 按锁文件安装 | `npm ci` | 不写入真实密钥或 AppID |
+| H5 合约模拟预览 | `npm run dev:h5` | `fixture`；仅用于页面开发和截图 |
+| 微信合约模拟开发 | `npm run dev:mp-weixin` | `fixture`；导入 `dist/dev/mp-weixin` |
+| H5 真实接口模式 | `npm run dev:h5:api` | API 未接入时明确返回 `BACKEND_NOT_CONFIGURED` |
+| 微信真实接口模式 | `npm run dev:mp-weixin:api` | API 未接入时不模拟成功 |
+| 类型检查 | `npm run type-check` | `vue-tsc --noEmit` |
+| 单元测试 | `npm test` | Vitest；当前覆盖校验、fixture 来源和错误映射 |
+| H5 演示构建 | `npm run build:demo:h5` | `fixture`，不得作为生产包 |
+| 微信演示构建 | `npm run build:demo:mp-weixin` | `fixture`，导入 `dist/build/mp-weixin` |
+| H5 生产检查 | `npm run build:h5` | 不启用 fixture |
+| 微信生产检查 | `npm run build:mp-weixin` | 不启用 fixture；导入 `dist/build/mp-weixin` |
+
+微信开发者工具中使用测试 AppID 或团队分配的开发 AppID；真实 AppID 不写入共享仓库。`manifest.json` 当前保持空 AppID，并关闭本地演示的 URL 校验，发布前必须由角色 B 按环境与域名白名单复核。
+
+`@types/node` 固定为 `18.18.0` 以兼容模板使用的 TypeScript 4.9；`sass` 是 `uni-ui` 图标样式在微信端编译所需的显式依赖。升级 TypeScript、UniApp 或这两个依赖前必须重新运行全部构建目标。
+
 ## 3. 建议仓库布局
 
-布局需在技术栈确认后创建，不要为占位提前生成空工程：
+当前前后端已采用下列布局；共享契约生成目录仍须在工具链决策后创建：
 
 ```text
 apps/
-  miniapp/            # UniApp 微信小程序
+  miniapp/            # 已初始化：UniApp 微信小程序；H5 仅作预览
 services/
-  api/                # 后端应用
+  api/                # 已初始化：FastAPI、MySQL 适配器与 Alembic
 packages/
-  contracts/          # OpenAPI 生成类型或共享契约（若工具链支持）
+  contracts/          # 尚未创建：等待共享 OpenAPI 生成工具链
 docs/
   ...
 ```
@@ -61,6 +59,17 @@ docs/
 前端和后端目录创建后，各自放一份简短 `AGENTS.md`，记录该目录的真实命令、框架约束和测试要求。
 
 ## 4. 配置
+
+### 4.1 前端 API 模式
+
+- `apps/miniapp/.env.example` 中的 `VITE_API_BASE_URL` 必须包含 `/api/v1` 前缀，例如本地 `http://127.0.0.1:8000/api/v1`；
+- 非本地地址只允许 HTTPS，本地 HTTP 只接受 `localhost` 或 `127.0.0.1`；
+- 微信小程序 API 模式使用 `npm run dev:mp-weixin:api`，登录时通过 `uni.login({ provider: "weixin" })` 获取一次性 code，再交给后端换取平台会话；
+- H5 API 模式可验证无登录接口和错误状态，但不能替代微信 code 流程，无法调用微信登录时必须显式失败；
+- 微信开发者工具和小程序后台必须把 API 域名配置为 request 合法域名，开发/生产 AppID、微信密钥和平台签名密钥不得写入前端环境文件；
+- access token 仅由 services 层读取并放入 `Authorization: Bearer`，页面不得解析 token；成功退出后清理本地平台会话。
+
+### 4.2 共享配置边界
 
 - 仓库提供 `.env.example`，只放变量名和无敏感示例；
 - 本地 `.env*`、证书、密钥和真实连接信息不得提交；
@@ -100,17 +109,42 @@ Mock 必须与契约生成或受契约测试约束；禁止手写一套与真实
 - 自动化测试不得依赖执行顺序或共享的长期测试账号；
 - 上传文件使用专用测试存储或本地替代，不写入仓库。
 
-## 8. 完成开发环境初始化时必须补充
+## 8. 剩余开发环境工作
 
-- 受支持的操作系统与运行时版本；
-- 一条从全新克隆到启动成功的路径；
-- 数据库创建和迁移命令；
-- seed/reset 测试数据命令；
-- 前端、后端、契约、端到端测试命令；
-- lint、格式化、类型检查和构建命令；
+- 在 CI 或第二台开发机确认受支持的 Node LTS 版本；
+- 从全新克隆再次执行两端安装、测试和构建；
+- 在隔离测试 MySQL 上执行全部迁移与集成测试；
+- 确认 OpenAPI 到前端类型的共享生成工具链；
+- 补齐 seed/reset 测试数据、端到端联调和 staging 命令；
+- 补齐生产部署、备份恢复、监控和回滚命令；
 - 常见错误与解决方式。
 
 所有命令必须在干净克隆中实际验证后才能写为可用。
+
+## 9. FastAPI 后端基础实现
+
+可运行后端位于 `services/api`。`local` 和 `test` 可显式使用内存存储；MySQL 适配器与 Alembic 迁移已实现，`staging` 和 `production` 禁止使用内存存储。
+
+在 `services/api` 目录执行：
+
+```powershell
+python -m pip install -e ".[test]"
+$env:TEAMUP_ENVIRONMENT = "local"
+$env:TEAMUP_ALLOW_LOCAL_LOGIN = "true"
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+在 `services/api` 目录执行检查：
+
+```powershell
+python -m pytest
+python -m compileall -q app tests
+python -m pip check
+```
+
+本地登录约定：调用 `POST /api/v1/auth/wechat/login` 时，`code` 使用 `local:<subject>`，并将 `consentAccepted` 设为 `true`。当 `TEAMUP_ENVIRONMENT=production` 时，该替代方案自动禁用。代理端口 `7897` 仅用于网络访问，不作为服务监听端口。
+
+真实微信登录配置：在服务端环境设置 `TEAMUP_WECHAT_APP_ID`、`TEAMUP_WECHAT_APP_SECRET`，可选设置 `TEAMUP_WECHAT_SESSION_ENDPOINT`、`TEAMUP_WECHAT_TIMEOUT_SECONDS` 和 `TEAMUP_WECHAT_PROXY_URL`。本机需要通过 7897 出网时，将后者设为 `http://127.0.0.1:7897`；服务仍监听 8000。禁止将 secret 写入前端、仓库、日志或响应。真实微信 code 只能使用一次；本地测试使用 `local:<subject>`，不会调用微信。
 
 ## 10. MySQL 持久化与迁移
 

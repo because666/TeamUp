@@ -1,0 +1,22 @@
+{
+  "name": "TeamUp",
+  "appid": "",
+  "description": "高校竞赛、科研与创业项目组队平台",
+  "versionName": "0.1.0",
+  "versionCode": "10",
+  "transformPx": false,
+  "h5": {
+    "title": "TeamUp"
+  },
+  "mp-weixin": {
+    "appid": "",
+    "setting": {
+      "urlCheck": false
+    },
+    "usingComponents": true
+  },
+  "uniStatistics": {
+    "enable": false
+  },
+  "vueVersion": "3"
+}

@@ -1,0 +1,56 @@
+{
+  "easycom": {
+    "autoscan": true,
+    "custom": {
+      "^uni-(.*)": "@dcloudio/uni-ui/lib/uni-$1/uni-$1.vue"
+    }
+  },
+  "pages": [
+    {
+      "path": "pages/auth/login",
+      "style": { "navigationBarTitleText": "TeamUp", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/discover/index",
+      "style": { "navigationBarTitleText": "发现", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/matches/index",
+      "style": { "navigationBarTitleText": "匹配", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/messages/index",
+      "style": { "navigationBarTitleText": "消息", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/me/index",
+      "style": { "navigationBarTitleText": "我的", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/profile/edit",
+      "style": { "navigationBarTitleText": "能力名片", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/projects/list",
+      "style": { "navigationBarTitleText": "我的项目", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/projects/edit",
+      "style": { "navigationBarTitleText": "项目草稿", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/projects/preview",
+      "style": { "navigationBarTitleText": "发布预览", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/projects/result",
+      "style": { "navigationBarTitleText": "发布结果", "navigationStyle": "custom" }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "TeamUp",
+    "navigationBarBackgroundColor": "#F4F7F5",
+    "backgroundColor": "#F4F7F5"
+  }
+}

@@ -2,7 +2,7 @@
 
 > Status: Confirmed<br>
 > Owner: 角色 A / 角色 B<br>
-> Last Updated: 2026-08-10
+> Last Updated: 2026-08-14
 
 本目录是 TeamUp 的版本化项目知识库。AI 应根据任务类型读取对应入口，不应无选择地加载所有文件。
 
@@ -29,6 +29,9 @@
 - [产品需求文档](product/PRD.md)：功能编号、业务规则和验收标准。
 - [后端产品需求文档](product/BACKEND_PRD.md)：FastAPI 后端功能、权限、数据、测试和分阶段交付要求。
 - [MVP 范围](product/MVP_SCOPE.md)：P0/P1、非目标和发布门槛。
+- [用户流程](product/USER_FLOWS.md)：首条 P0 纵向切片及失败、恢复和退出路径。
+- [信息架构](product/INFORMATION_ARCHITECTURE.md)：小程序导航、页面层级与权限可见性。
+- [页面与状态规范](product/SCREEN_SPEC.md)：页面字段、状态、契约映射和 `GAP-*` 清单。
 
 ## 架构
 
@@ -58,7 +61,9 @@
 - [任务目录](status/tasks/README.md)：各分支独立任务状态。
 - [角色 B 文档与技术基线评审](status/reviews/TUP-20260810-role-b-review.md)：无需 PR 的核对范围、Codex 提示词和结论模板。
 - [前后端对接指南角色 A 评审](status/reviews/TUP-20260810-role-a-frontend-integration-review.md)：角色 A 对页面、mock 和联调流程的核对范围与结论模板。
+- [角色 A 产品基础技术评审](status/reviews/TUP-20260810-role-a-product-foundation-review.md)：登录、名片与项目发布切片的 `GAP-*` 核对模板。
 - [FastAPI 后端决策角色 A 评审](status/reviews/TUP-20260811-fastapi-backend-review.md)：角色 A 对契约和用户可见影响的评审入口。
+- [前端 foundation 角色 B 评审](status/reviews/TUP-20260811-frontend-foundation-review.md)：角色 B 对前端契约、安全边界和构建结果的评审记录。
 - [MySQL 持久化角色 A 评审](status/reviews/TUP-20260811-mysql-persistence-review.md)：角色 A 对持久化切换、契约兼容和前端影响的评审入口。
 - [match-v0.1 角色 A 评审](status/reviews/TUP-20260811-match-v0-1-review.md)：角色 A 对规则权重、解释代码和后续字段契约的评审入口。
 - [匹配 API/数据契约角色 A 评审](status/reviews/TUP-20260811-match-api-data-contract-review.md)：角色 A 对岗位粒度、匹配偏好、分页、曝光和兼容迁移的决策入口。
@@ -67,6 +72,9 @@
 - [用户拉黑与安全过滤角色 A 评审](status/reviews/TUP-20260812-user-blocks-review.md)：角色 A 对拉黑幂等、隐私反馈和跨模块阻断边界的验收入口。
 - [项目岗位邀请角色 A 评审](status/reviews/TUP-20260812-project-invitations-review.md)：角色 A 对邀请有效期、状态机、权限、容量和拉黑边界的验收入口。
 - [双人会话与文本消息角色 A 评审](status/reviews/TUP-20260812-conversations-messages-review.md)：角色 A 对会话上下文、消息幂等、分页、权限和拉黑边界的验收入口。
+- [前端真实 API adapter 角色 A 评审](status/reviews/TUP-20260814-frontend-api-adapter-review.md)：角色 A 对微信登录、真实 API 模式和前端错误状态的评审入口。
+- [项目 PUT 兼容角色 A 评审](status/reviews/TUP-20260814-project-put-compat-review.md)：角色 A 对微信请求方法兼容与项目更新语义的评审入口。
+- [P0 前后端集成角色 A 评审](status/reviews/TUP-20260814-p0-integration-review.md)：组合分支的测试、构建、联调与剩余环境风险评审入口。
 - [任务模板](status/templates/TASK_TEMPLATE.md)、[交接模板](status/templates/HANDOFF_TEMPLATE.md) 和 [模型发布模板](status/templates/MODEL_RELEASE_TEMPLATE.md)。
 
 ## 历史来源
