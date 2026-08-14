@@ -480,6 +480,7 @@ def make_app(
         members = app_store.list_project_members(user_id, project_id)
         return envelope(request, [member.model_dump(mode="json") for member in members])
 
+    @api.put("/projects/{project_id}", tags=["projects"], response_model=Envelope[ProjectData])
     @api.patch("/projects/{project_id}", tags=["projects"], response_model=Envelope[ProjectData])
     def update_project(project_id: str, payload: ProjectUpdate, request: Request, user_id: str = Depends(current_user)):
         project = app_store.update_project(user_id, project_id, payload)

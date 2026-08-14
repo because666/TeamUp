@@ -133,6 +133,7 @@ Authorization: Bearer <token>
 | API-PROJ-01 | POST | `/projects` | 创建项目草稿 | PROJ-001 |
 | API-PROJ-02 | GET | `/projects/{projectId}` | 项目详情 | PROJ-001 |
 | API-PROJ-03 | PATCH | `/projects/{projectId}` | 更新自己的项目 | PROJ-001 |
+| API-PROJ-03-WX | PUT | `/projects/{projectId}` | 微信客户端兼容的等价项目更新 | PROJ-001 |
 | API-PROJ-04 | POST | `/projects/{projectId}/publish` | 发布项目 | PROJ-001 |
 | API-PROJ-05 | POST | `/projects/{projectId}/close` | 关闭项目 | PROJ-001 |
 | API-PROJ-06 | GET | `/me/projects` | 当前用户项目列表 | GAP-PROJ-03 |

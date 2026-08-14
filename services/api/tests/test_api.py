@@ -176,6 +176,7 @@ def test_openapi_contract_has_all_public_routes_and_typed_success_responses() ->
         ("get", "/api/v1/projects/{project_id}"),
         ("get", "/api/v1/projects/{project_id}/members"),
         ("patch", "/api/v1/projects/{project_id}"),
+        ("put", "/api/v1/projects/{project_id}"),
         ("post", "/api/v1/projects/{project_id}/publish"),
         ("post", "/api/v1/projects/{project_id}/close"),
         ("get", "/api/v1/projects"),
@@ -220,6 +221,26 @@ def test_vertical_profile_and_project_flow() -> None:
     )
     assert published.status_code == 200
     assert published.json()["data"]["status"] == "PUBLISHED"
+
+
+def test_project_put_compatibility_route_reuses_update_authorization_and_versioning() -> None:
+    client = make_client()
+    owner_token = login(client, "put-owner")
+    other_token = login(client, "put-other")
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    other_headers = {"Authorization": f"Bearer {other_token}"}
+    project = client.post("/api/v1/projects", headers=owner_headers, json=project_payload()).json()["data"]
+    path = f"/api/v1/projects/{project['id']}"
+    payload = {**project_payload(), "title": "WeChat PUT update", "version": project["version"]}
+
+    assert client.put(path, json=payload).status_code == 401
+    assert client.put(path, headers=other_headers, json=payload).status_code == 403
+    updated = client.put(path, headers=owner_headers, json=payload)
+    assert updated.status_code == 200
+    assert updated.json()["data"]["title"] == "WeChat PUT update"
+    assert updated.json()["data"]["version"] == project["version"] + 1
+    assert client.put(path, headers=owner_headers, json=payload).status_code == 409
+    assert client.put("/api/v1/projects/prj_missing", headers=owner_headers, json=payload).status_code == 404
 
 
 def test_discovery_filters_visibility_blocks_and_owner_projects() -> None:
