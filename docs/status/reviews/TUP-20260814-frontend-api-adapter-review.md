@@ -22,3 +22,5 @@
 ## 3. 验证证据
 
 角色 B 将在任务文件中记录实际执行的前端测试、类型检查和构建命令；真实微信开发者工具和 staging 登录需要角色 A/B 共同验证。
+
+后端兼容契约基线为 `role-b/feature/TUP-20260814-project-put-compat` 的 `1bc3cfa`；评审时必须同时核对该提交的 PUT OpenAPI schema。

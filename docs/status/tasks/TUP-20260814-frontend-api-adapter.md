@@ -30,7 +30,7 @@
 
 - 修改方：角色 B（跨职责实现，经用户明确授权）；
 - 评审方：角色 A；
-- 接口基线：后端 `role-b/feature/TUP-20260813-ci-contract-gate` 的 API contract 与 `f053007`；
+- 接口基线：后端 `role-b/feature/TUP-20260814-project-put-compat` 的 API contract 与 `1bc3cfa`；
 - 影响范围：前端 services 适配层、会话存储、P0 登录/名片/项目页面的网络行为；
 - 角色 A 需要重点复核：微信登录调用方式、字段映射、错误状态展示和 fixture/API 模式切换。
 
@@ -58,4 +58,4 @@
 
 - 当前仓库没有真实微信 AppID、后端 staging 地址或微信开发者工具，真实平台登录和真机网络仍需环境具备后验证；
 - access token 的生产刷新/轮换策略仍由后端会话契约决定，本任务只实现已有 accessToken 的短期客户端保存和清理。
-- 微信客户端不支持 PATCH；本任务改用 PUT，后端等价兼容路由由 `TUP-20260814-project-put-compat` 独立任务提供。
+- 微信客户端不支持 PATCH；本任务使用 PUT，后端等价兼容路由已由 `TUP-20260814-project-put-compat` 提交 `1bc3cfa` 提供。
