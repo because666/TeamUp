@@ -1,10 +1,10 @@
 # TUP-20260814 P0 前后端集成
 
-> Status: In Progress  
-> Owner: 角色 B  
-> Reviewer: 角色 A  
-> Base Commit: `1bc3cfa`  
-> Branch: `role-b/feature/TUP-20260814-p0-integration`  
+> Status: Ready for Review<br>
+> Owner: 角色 B<br>
+> Reviewer: 角色 A<br>
+> Base Commit: `1bc3cfa`<br>
+> Branch: `role-b/feature/TUP-20260814-p0-integration`<br>
 > Last Updated: 2026-08-14
 
 ## 1. 目标
@@ -41,9 +41,24 @@
 
 ## 6. 验证记录
 
-待集成后填写。
+组合提交：`9fe115b`（将前端 adapter `e8cdd0b` 合入后端 PUT 基线）。
+
+| Command / Check | Result | Notes |
+| --- | --- | --- |
+| `npm test` | Passed | 4 个测试文件、17 项测试通过 |
+| `npm run type-check` | Passed | `vue-tsc --noEmit` 无错误 |
+| `VITE_API_BASE_URL=http://127.0.0.1:8000/api/v1 npm run build:h5` | Passed | H5 真实 API 模式生产构建通过 |
+| `VITE_API_BASE_URL=http://127.0.0.1:8000/api/v1 npm run build:mp-weixin` | Passed | 微信小程序真实 API 模式生产构建通过 |
+| `python -m pytest -ra` | Passed with skips | 74 passed；7 个真实 MySQL 用例因未配置 `TEAMUP_TEST_MYSQL_URL` 跳过 |
+| `python -m compileall -q app tests` | Passed | 后端源码与测试编译通过 |
+| `python -m pip check` | Passed | `No broken requirements found` |
+| P0 OpenAPI method/path 与 typed response 检查 | Passed | 前端使用的 8 个 method/path 全部存在，8 个成功响应均有 schema |
+| 本地 Uvicorn P0 HTTP smoke（端口 8014） | Passed | 登录、名片 GET/PUT、项目 POST/PUT/发布、我的项目和退出均通过；进程已停止 |
+| 文档相对链接与冲突标记检查 | Passed | 链接目标均存在，无未解决冲突标记 |
 
 ## 7. 剩余风险
 
 - 真实微信 AppID、微信开发者工具、合法域名和 staging 未在当前本机提供；
+- 未配置独立 `TEAMUP_TEST_MYSQL_URL`，本次组合验证未重复执行 7 个真实 MySQL 专属用例；
+- Node `v25.2.1` 可完成当前构建，但团队长期支持的 Node LTS 仍需 CI 或第二台开发机确认；
 - 角色 A 的最终 UI/产品验收仍需写入独立评审文件，集成分支不能代替该结论。

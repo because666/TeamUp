@@ -21,7 +21,7 @@
 | 技术架构 | Proposed | 模块化单体和契约基线待双方评审 |
 | 前端工程 | Ready for review | 任务分支已完成 UniApp P0 页面、fixture、真实 API adapter、测试与构建；尚未集成 `main` |
 | 后端工程 | Ready for review | FastAPI、MySQL/Alembic、认证、项目、匹配、协作、安全与可观测性堆叠任务已实现并验证；尚未集成 `main` |
-| P0 前后端集成 | In progress | 独立集成分支正在组合两端并复跑测试、构建和 OpenAPI 契约检查 |
+| P0 前后端集成 | Ready for review | 独立集成分支已完成两端测试、构建、OpenAPI 契约检查和本地 HTTP smoke，等待角色 A 评审 |
 | 部署环境 | Not started | 腾讯云方向已知，具体拓扑未确定 |
 
 ## 3. 活跃任务
@@ -43,7 +43,7 @@
 | TUP-20260812-conversations-messages | 角色 B | 双人会话与文本消息 | Ready for Review | `role-b/feature/TUP-20260812-conversations-messages` | [任务记录](tasks/TUP-20260812-conversations-messages.md) |
 | TUP-20260814-frontend-api-adapter | 角色 B（跨角色集成） | 微信登录与 P0 真实 API adapter | Ready for Review | `role-b/feature/TUP-20260814-frontend-api-adapter` | [任务记录](tasks/TUP-20260814-frontend-api-adapter.md) |
 | TUP-20260814-project-put-compat | 角色 B | 微信兼容项目 PUT 更新路由 | Ready for Review | `role-b/feature/TUP-20260814-project-put-compat` | [任务记录](tasks/TUP-20260814-project-put-compat.md) |
-| TUP-20260814-p0-integration | 角色 B | P0 前后端组合验证与交接 | In Progress | `role-b/feature/TUP-20260814-p0-integration` | [任务记录](tasks/TUP-20260814-p0-integration.md) |
+| TUP-20260814-p0-integration | 角色 B | P0 前后端组合验证与交接 | Ready for Review | `role-b/feature/TUP-20260814-p0-integration` | [任务记录](tasks/TUP-20260814-p0-integration.md) |
 
 完整的堆叠任务与评审入口见 [任务目录](tasks/README.md)。集成分支由角色 B 唯一编辑；角色 A 通过独立评审文件给出结论，双方不得同时修改高冲突契约。
 
@@ -68,7 +68,7 @@
 
 ## 6. 下一步建议顺序
 
-1. 角色 B 完成并推送 P0 集成分支，提供可复现的两端验证记录。
+1. 角色 B 推送 P0 集成分支和可复现的两端验证记录。
 2. 角色 A 在 `docs/status/reviews/TUP-20260814-p0-integration-review.md` 核对页面、契约和用户可见行为并写入结论。
 3. 双方补做微信开发者工具、合法域名、staging MySQL 和端到端真机验收。
 4. 仅在评审文件明确通过后，按 Git 工作流将堆叠任务集成到 `main`。
