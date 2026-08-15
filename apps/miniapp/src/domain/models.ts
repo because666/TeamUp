@@ -37,6 +37,7 @@ export interface ProfileDraft {
 }
 
 export interface RecruitmentRoleDraft {
+  id: string;
   name: string;
   skills: string[];
   headcount: number;
@@ -47,6 +48,7 @@ export interface RecruitmentRoleDraft {
 
 export interface ProjectDraft {
   id: string;
+  ownerId?: string;
   title: string;
   description: string;
   direction: string;
@@ -57,6 +59,59 @@ export interface ProjectDraft {
   version: number;
   publishedAt: string | null;
   roles: RecruitmentRoleDraft[];
+}
+
+export type ContactMethodType = "WECHAT" | "QQ" | "EMAIL";
+export type ContactExchangeStatus = "PENDING" | "ACCEPTED" | "REJECTED" | "CANCELLED";
+export type ContactExchangeBox = "SENT" | "RECEIVED";
+
+export interface ContactMethod {
+  type: ContactMethodType;
+  value: string;
+}
+
+export interface ContactCard {
+  methods: ContactMethod[];
+  version: number;
+  updatedAt?: string;
+}
+
+export interface ContactExchangeRequest {
+  id: string;
+  projectId: string;
+  roleId: string;
+  projectTitle: string;
+  roleName: string;
+  requesterUserId: string;
+  recipientUserId: string;
+  box: ContactExchangeBox;
+  peerDisplayName: string;
+  status: ContactExchangeStatus;
+  peerContactCard: ContactCard | null;
+  createdAt: string;
+  respondedAt: string | null;
+}
+
+export type ProjectInvitationStatus = "PENDING" | "ACCEPTED" | "REJECTED" | "EXPIRED" | "CANCELLED";
+export type ProjectInvitationBox = "SENT" | "RECEIVED";
+
+export interface ProjectInvitationRecord {
+  id: string;
+  projectId: string;
+  roleId: string;
+  inviterUserId: string;
+  inviteeUserId: string;
+  status: ProjectInvitationStatus;
+  expiresAt: string;
+  createdAt: string;
+  respondedAt: string | null;
+}
+
+export interface ProjectInvitation extends ProjectInvitationRecord {
+  projectTitle: string;
+  roleName: string;
+  box: ProjectInvitationBox;
+  peerDisplayName: string;
 }
 
 export interface DiscoveryProject {
@@ -102,6 +157,7 @@ export const emptyProjectDraft = (): ProjectDraft => ({
   publishedAt: null,
   roles: [
     {
+      id: "",
       name: "",
       skills: [],
       headcount: 1,

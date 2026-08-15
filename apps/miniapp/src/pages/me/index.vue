@@ -29,7 +29,12 @@
             <text class="profile-strip__name">{{ profile.nickname || "待完善能力名片" }}</text>
             <text class="profile-strip__meta">{{ profileMeta }}</text>
           </view>
-          <text class="profile-strip__score">{{ completion }}%</text>
+          <view class="profile-strip__completion">
+            <text class="profile-strip__score">{{ completion }}%</text>
+            <view class="profile-strip__track">
+              <view class="profile-strip__progress" :style="{ width: `${completion}%` }" />
+            </view>
+          </view>
         </view>
 
         <view class="section">
@@ -65,7 +70,12 @@
         </view>
 
         <view class="section workspace-links">
-          <button class="workspace-link">
+          <button class="workspace-link" @click="openPage(routes.contactSettings)">
+            <uni-icons type="locked" size="20" color="#607069" />
+            <text>联系方式</text>
+            <uni-icons class="workspace-link__arrow" type="right" size="18" color="#74817b" />
+          </button>
+          <button class="workspace-link workspace-link--secondary">
             <uni-icons type="locked" size="20" color="#607069" />
             <text>账户与隐私</text>
             <text class="workspace-link__pending">待后续任务</text>
@@ -162,13 +172,14 @@ onShow(loadWorkspace);
 
 .profile-strip {
   display: flex;
-  min-height: 150rpx;
+  min-height: 164rpx;
   align-items: center;
   gap: 22rpx;
-  margin-top: 30rpx;
-  padding: 26rpx 0;
-  border-top: 1rpx solid #dce4df;
-  border-bottom: 1rpx solid #dce4df;
+  margin-top: 32rpx;
+  padding: 26rpx;
+  border: 1rpx solid #d8e2dd;
+  border-radius: 8rpx;
+  background: #ffffff;
 }
 
 .profile-strip__avatar {
@@ -208,10 +219,33 @@ onShow(loadWorkspace);
   font-size: 22rpx;
 }
 
+.profile-strip__completion {
+  display: flex;
+  width: 92rpx;
+  flex: 0 0 92rpx;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 10rpx;
+}
+
 .profile-strip__score {
   color: #12664f;
-  font-size: 28rpx;
+  font-size: 24rpx;
   font-weight: 800;
+}
+
+.profile-strip__track {
+  width: 92rpx;
+  height: 8rpx;
+  overflow: hidden;
+  border-radius: 8rpx;
+  background: #dce9e2;
+}
+
+.profile-strip__progress {
+  height: 100%;
+  border-radius: inherit;
+  background: #12664f;
 }
 
 .section-heading {
@@ -223,27 +257,32 @@ onShow(loadWorkspace);
 
 .icon-command {
   display: flex;
-  width: 72rpx;
-  height: 72rpx;
-  flex: 0 0 72rpx;
+  width: 76rpx;
+  height: 76rpx;
+  flex: 0 0 76rpx;
   align-items: center;
   justify-content: center;
-  border: 1rpx solid #cbd7d1;
+  margin: 0 0 0 auto;
+  border: 1rpx solid #bfd0c8;
   border-radius: 8rpx;
   background: #ffffff;
   line-height: 1;
 }
 
+.icon-command:active {
+  background: #eaf3ef;
+}
+
 .skill-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 10rpx;
-  margin-top: 24rpx;
+  gap: 12rpx;
+  margin-top: 22rpx;
 }
 
 .skill-row__item {
-  padding: 9rpx 15rpx;
-  border-radius: 5rpx;
+  padding: 10rpx 16rpx;
+  border-radius: 6rpx;
   background: #e9f2ed;
   color: #12664f;
   font-size: 21rpx;
@@ -266,11 +305,13 @@ onShow(loadWorkspace);
 .workspace-link {
   display: flex;
   width: 100%;
-  min-height: 88rpx;
+  min-height: 92rpx;
   align-items: center;
   gap: 16rpx;
-  padding: 0;
-  background: transparent;
+  padding: 0 22rpx;
+  border: 1rpx solid #d9e3de;
+  border-radius: 8rpx;
+  background: #ffffff;
   color: #435149;
   font-size: 25rpx;
   text-align: left;
@@ -280,5 +321,13 @@ onShow(loadWorkspace);
   margin-left: auto;
   color: #8a9690;
   font-size: 21rpx;
+}
+
+.workspace-link__arrow {
+  margin-left: auto;
+}
+
+.workspace-link--secondary {
+  margin-top: 12rpx;
 }
 </style>

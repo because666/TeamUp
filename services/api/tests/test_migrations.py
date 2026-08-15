@@ -10,6 +10,8 @@ EXPECTED_TABLES = {
     "users",
     "sessions",
     "profiles",
+    "contact_cards",
+    "contact_methods",
     "profile_skills",
     "profile_collaboration_scenarios",
     "projects",
@@ -23,6 +25,7 @@ EXPECTED_TABLES = {
     "project_members",
     "blocks",
     "invitations",
+    "contact_exchange_requests",
     "conversations",
     "conversation_participants",
     "messages",
@@ -66,6 +69,20 @@ def test_initial_migration_upgrades_and_downgrades(tmp_path: Path, monkeypatch) 
             and foreign_key["referred_columns"] == ["project_id", "id"]
             for foreign_key in invitation_foreign_keys
         )
+        contact_request_foreign_keys = inspect(engine).get_foreign_keys(
+            "contact_exchange_requests"
+        )
+        assert any(
+            foreign_key["constrained_columns"] == ["project_id", "role_id"]
+            and foreign_key["referred_table"] == "project_roles"
+            and foreign_key["referred_columns"] == ["project_id", "id"]
+            for foreign_key in contact_request_foreign_keys
+        )
+        assert {column["name"] for column in inspect(engine).get_columns("contact_methods")} == {
+            "user_id",
+            "method_type",
+            "value",
+        }
         message_foreign_keys = inspect(engine).get_foreign_keys("messages")
         assert any(
             foreign_key["constrained_columns"] == ["conversation_id", "sender_id"]

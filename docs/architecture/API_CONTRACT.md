@@ -3,7 +3,7 @@
 > Status: Proposed<br>
 > Owner: 角色 B<br>
 > Reviewers: 角色 A<br>
-> Last Updated: 2026-08-12
+> Last Updated: 2026-08-15
 
 ## 基础实现状态
 
@@ -88,7 +88,7 @@ Authorization: Bearer <token>
 - `POST /auth/wechat/login` 接收微信一次性登录凭证，返回平台访问凭证。
 - 受保护接口使用 `Authorization: Bearer <token>`。
 - `401` 表示未认证或会话失效；`403` 表示已认证但无权操作资源。
-- 项目、消息、邀请、举报等资源必须做资源级授权。
+- 项目、联系请求、消息、邀请、举报等资源必须做资源级授权。
 - 管理接口使用独立角色与审计，不复用普通用户“隐藏按钮”。
 
 ## 4. 分页、筛选与排序
@@ -113,10 +113,11 @@ Authorization: Bearer <token>
 
 ## 5. 幂等与并发
 
-- 创建邀请和接受邀请当前使用领域唯一键与状态机提供重复保护；通用 `Idempotency-Key` 持久化仍为 `Proposed`，后续消息等不能据此假定已实现。
+- 创建联系交换申请、邀请及其状态动作使用领域唯一键和状态机提供重复保护；通用 `Idempotency-Key` 持久化仍为 `Proposed`。
 - 发送消息使用请求体 `clientMessageId` 作为 sender 范围的领域幂等键；同 key 同正文返回原消息，不同正文返回 `409 MESSAGE_IDEMPOTENCY_CONFLICT`。
 - 更新资源使用 `version` 或等效乐观锁；版本冲突返回 `409 CONFLICT`。
 - 接受邀请由服务端事务再次检查项目状态、岗位容量、过期时间和成员唯一性。
+- 接受联系方式交换由服务端事务再次检查参与者、双向拉黑和双方联系名片；联系方式值不得出现在日志或错误详情中。
 
 ## 6. 端点清单
 
@@ -145,11 +146,19 @@ Authorization: Bearer <token>
 | API-MATCH-01 | GET | `/projects/{projectId}/matches` | 指定岗位的候选成员 | MATCH-001/002 |
 | API-MATCH-02 | GET | `/me/project-matches` | 用户候选项目 | MATCH-001/002 |
 | API-MATCH-03 | POST | `/recommendation-impressions` | 登记客户端实际展示的候选与位置 | MATCH-003 |
-| API-CONV-01 | POST | `/conversations` | 发起或取得会话 | MSG-001 |
-| API-CONV-02 | GET | `/conversations` | 会话列表 | MSG-001 |
-| API-MSG-01 | GET | `/conversations/{conversationId}/messages` | 消息分页 | MSG-001 |
-| API-MSG-02 | POST | `/conversations/{conversationId}/messages` | 发送文本消息 | MSG-001 |
+| API-CONTACT-CARD-01 | GET | `/me/contact-card` | 获取自己的私有联系名片 | CONTACT-001 |
+| API-CONTACT-CARD-02 | PUT | `/me/contact-card` | 更新自己的私有联系名片 | CONTACT-001 |
+| API-CONTACT-REQ-01 | POST | `/contact-exchange-requests` | 针对项目岗位申请交换联系方式 | CONTACT-001 |
+| API-CONTACT-REQ-02 | GET | `/me/contact-exchange-requests` | 获取发出或收到的交换申请 | CONTACT-001 |
+| API-CONTACT-REQ-03 | POST | `/contact-exchange-requests/{requestId}/accept` | 接收方同意交换 | CONTACT-001 |
+| API-CONTACT-REQ-04 | POST | `/contact-exchange-requests/{requestId}/reject` | 接收方拒绝交换 | CONTACT-001 |
+| API-CONTACT-REQ-05 | POST | `/contact-exchange-requests/{requestId}/cancel` | 申请方取消待处理申请 | CONTACT-001 |
+| API-CONV-01 | POST | `/conversations` | Deprecated：历史会话兼容接口，不用于 P0 | MSG-001 |
+| API-CONV-02 | GET | `/conversations` | Deprecated：历史会话列表，不用于 P0 | MSG-001 |
+| API-MSG-01 | GET | `/conversations/{conversationId}/messages` | Deprecated：历史消息分页，不用于 P0 | MSG-001 |
+| API-MSG-02 | POST | `/conversations/{conversationId}/messages` | Deprecated：历史文本消息，不用于 P0 | MSG-001 |
 | API-TEAM-01 | POST | `/invitations` | 创建岗位邀请 | TEAM-001 |
+| API-TEAM-04 | GET | `/me/invitations` | 获取当前用户发出或收到的岗位邀请 | TEAM-001 |
 | API-TEAM-02 | POST | `/invitations/{invitationId}/accept` | 接受邀请 | TEAM-001 |
 | API-TEAM-03 | POST | `/invitations/{invitationId}/reject` | 拒绝邀请 | TEAM-001 |
 | API-SAFE-01 | POST | `/reports` | 提交举报 | SAFE-001 |
@@ -158,7 +167,86 @@ Authorization: Bearer <token>
 
 ## 7. 关键 DTO 最小字段
 
-### 双人会话与文本消息（Proposed，任务分支已实现）
+### 联系名片与联系方式交换（Confirmed by 角色 A，待角色 B 评审实现）
+
+`API-CONTACT-CARD-01/02`：
+
+```http
+GET /api/v1/me/contact-card
+PUT /api/v1/me/contact-card
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+首次 GET 的 `data` 为 `null`。PUT 请求示例：
+
+```json
+{
+  "methods": [
+    {"type": "WECHAT", "value": "teamup_user"},
+    {"type": "QQ", "value": "12345678"},
+    {"type": "EMAIL", "value": "user@example.com"}
+  ],
+  "version": 0
+}
+```
+
+成功 `data` 在同一结构上增加 `updatedAt`，首次保存版本为 1。`methods` 至少 1 项、最多 3 项且 type 唯一；微信号 6..20 字符并以字母开头，QQ 为 5..12 位数字，邮箱为 5..254 字符并通过基础格式校验。P0 不接受 `PHONE`。更新必须携带当前 `version`，冲突返回 `409 VERSION_CONFLICT`。
+
+联系名片只允许本人 GET/PUT。它不出现在 profile、project、match、recommendation、公开列表或通知响应中。
+
+`API-CONTACT-REQ-01`：
+
+```http
+POST /api/v1/contact-exchange-requests
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"projectId":"prj_opaque_id","roleId":"role_opaque_id"}
+```
+
+服务端只根据已认证用户、项目 owner 和岗位关系确定 requester/recipient；请求体禁止 `recipientUserId`。项目必须为 `PUBLISHED`，岗位必须属于项目、状态为 `OPEN` 且有剩余容量，申请人不能是 owner 或已有成员，申请人必须已有联系名片。任一方向拉黑返回 `409 USER_BLOCKED`。同一 requester、project、role 的 `PENDING` 重复提交返回原记录；已有 `ACCEPTED` 记录时也返回原已交换结果。
+
+`API-CONTACT-REQ-02`：
+
+```http
+GET /api/v1/me/contact-exchange-requests?box=RECEIVED&limit=20&cursor=<opaque>
+Authorization: Bearer <token>
+```
+
+`box` 只允许 `SENT|RECEIVED`；按 `(createdAt,id)` 倒序稳定分页，`limit` 默认 20、最大 50。每条 `data`：
+
+```json
+{
+  "id": "cer_opaque_id",
+  "projectId": "prj_opaque_id",
+  "roleId": "role_opaque_id",
+  "projectTitle": "校园低碳路线规划",
+  "roleName": "数据分析",
+  "requesterUserId": "usr_requester",
+  "recipientUserId": "usr_recipient",
+  "box": "RECEIVED",
+  "peerDisplayName": "林同学",
+  "status": "PENDING",
+  "peerContactCard": null,
+  "createdAt": "2026-08-15T10:00:00Z",
+  "respondedAt": null
+}
+```
+
+只有 requester 和 recipient 可获得该记录。`peerContactCard` 仅在状态为 `ACCEPTED` 时返回对方当前联系名片；其他状态固定为 `null`，禁止通过字段缺省、错误信息或预加载侧信道泄露联系方式。
+
+`API-CONTACT-REQ-03/04/05` 不需要请求体：
+
+- `accept` 只允许 recipient 处理 `PENDING`；双方联系名片均存在且当前未拉黑，成功后原子改为 `ACCEPTED` 并披露对方名片；重复接受返回原确定结果；
+- `reject` 只允许 recipient；`PENDING -> REJECTED`，重复拒绝返回原确定结果；
+- `cancel` 只允许 requester；`PENDING -> CANCELLED`，重复取消返回原确定结果；
+- 非参与者统一返回 `404 RESOURCE_NOT_FOUND`；错误参与方动作或冲突终态返回 `409 CONTACT_REQUEST_NOT_ACTIONABLE`；缺少本人联系名片返回 `409 CONTACT_CARD_REQUIRED`；
+- 联系方式值不得写入应用日志、审计事件、推荐事件、错误 details 或推送通知。
+
+### 双人会话与文本消息（Deprecated，历史任务分支已实现）
+
+以下接口由 `CONTACT-001` 替代，不属于 P0 页面或发布闭环。保留本节用于兼容性和安全审计，不得据此新增聊天产品能力。
 
 `API-CONV-01`：
 
@@ -367,6 +455,15 @@ Content-Type: application/json
 - 首版有效期固定为服务端创建后 7 天，该时长由角色 A 评审；客户端不提交或延长过期时间；
 - 同一项目、岗位和 invitee 最多一条有效 `PENDING` 邀请；重复创建返回原 `id`、`createdAt` 和 `expiresAt`；
 - 自邀返回 `422 CANNOT_INVITE_SELF`；其他失败使用 `FORBIDDEN`、`PROJECT_NOT_MATCHABLE`、`ROLE_NOT_OPEN`、`ROLE_FULL`、`MEMBER_ALREADY_EXISTS` 或 `RESOURCE_NOT_FOUND`。
+
+`API-TEAM-04`：
+
+```http
+GET /api/v1/me/invitations?box=RECEIVED&limit=20&cursor=<opaque>
+Authorization: Bearer <token>
+```
+
+`box` 只允许 `SENT|RECEIVED`；按 `(createdAt,id)` 倒序稳定分页，`limit` 默认 20、最大 50。每条摘要在 `API-TEAM-01` 的邀请字段上增加 `projectTitle`、`roleName`、`box` 和 `peerDisplayName`。只有 inviter 和 invitee 能在自己的对应分段获得记录，其他用户列表不包含该邀请。读取时已超过 `expiresAt` 的 `PENDING` 邀请转换为 `EXPIRED` 并释放待处理唯一键；列表不返回联系方式、非公开能力名片或成员隐私字段。
 
 `API-TEAM-02`：
 

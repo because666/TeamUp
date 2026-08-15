@@ -148,6 +148,7 @@
               <text class="visibility-row__copy">默认关闭；开启后公开昵称、院校、专业、技能与简介。</text>
             </view>
             <switch
+              :key="visibilitySwitchKey"
               :checked="draft.visibility"
               color="#12664f"
               @change="changeVisibility"
@@ -164,6 +165,16 @@
           </text>
         </view>
       </form>
+
+      <ConfirmDialog
+        :visible="visibilityConfirmOpen"
+        title="公开能力名片？"
+        description="开启后会公开昵称、院校、专业、技能和简介；联系方式不会公开。"
+        confirm-label="确认公开"
+        cancel-label="保持关闭"
+        @confirm="confirmVisibility"
+        @cancel="cancelVisibility"
+      />
     </view>
   </view>
 </template>
@@ -172,6 +183,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { onBackPress, onLoad } from "@dcloudio/uni-app";
 import BrandHeader from "@/components/BrandHeader.vue";
+import ConfirmDialog from "@/components/ConfirmDialog.vue";
 import FixtureBanner from "@/components/FixtureBanner.vue";
 import NumberStepper from "@/components/NumberStepper.vue";
 import ProgressRail from "@/components/ProgressRail.vue";
@@ -201,6 +213,8 @@ const ready = ref(false);
 const confirmedSnapshot = ref("");
 const loadError = ref<ErrorPresentation | null>(null);
 const submitError = ref<ErrorPresentation | null>(null);
+const visibilityConfirmOpen = ref(false);
+const visibilitySwitchKey = ref(0);
 let allowLeave = false;
 
 const gradeIndex = computed(() => Math.max(0, gradeOptions.indexOf(draft.grade)));
@@ -263,18 +277,24 @@ function selectGrade(event: { detail: { value: string | number } }): void {
   draft.grade = gradeOptions[Number(event.detail.value)] || "";
 }
 
-async function changeVisibility(event: Event): Promise<void> {
+function changeVisibility(event: Event): void {
   const checked = (event as Event & { detail: { value: boolean } }).detail.value;
   if (!checked) {
     draft.visibility = false;
     return;
   }
-  draft.visibility = await confirmDialog(
-    "确认公开能力名片",
-    "开启后会公开昵称、院校、专业、技能和简介；联系方式不会公开。",
-    "确认公开",
-    "保持关闭",
-  );
+  visibilityConfirmOpen.value = true;
+}
+
+function confirmVisibility(): void {
+  draft.visibility = true;
+  visibilityConfirmOpen.value = false;
+}
+
+function cancelVisibility(): void {
+  draft.visibility = false;
+  visibilitySwitchKey.value += 1;
+  visibilityConfirmOpen.value = false;
 }
 
 async function saveProfile(): Promise<void> {
@@ -380,7 +400,7 @@ onLoad(loadProfile);
 
 .field-grid {
   display: grid;
-  gap: 18rpx;
+  gap: 20rpx;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -390,12 +410,12 @@ onLoad(loadProfile);
 
 .picker-control {
   display: flex;
-  height: 88rpx;
+  height: 92rpx;
   align-items: center;
   justify-content: space-between;
   gap: 16rpx;
   padding: 0 24rpx;
-  border: 1rpx solid #cfd9d3;
+  border: 1rpx solid #c7d3cd;
   border-radius: 8rpx;
   background: #ffffff;
   color: #17231e;
@@ -408,27 +428,36 @@ onLoad(loadProfile);
 
 .choice-grid {
   display: grid;
-  gap: 12rpx;
+  gap: 14rpx;
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .choice-grid__item {
+  display: flex;
+  width: 100%;
   min-width: 0;
-  min-height: 78rpx;
-  padding: 0 10rpx;
-  border: 1rpx solid #cbd6d0;
-  border-radius: 6rpx;
+  min-height: 84rpx;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12rpx;
+  border: 1rpx solid #c7d3cd;
+  border-radius: 8rpx;
   background: #ffffff;
   color: #435149;
   font-size: 23rpx;
   font-weight: 700;
-  line-height: 78rpx;
+  line-height: 1.25;
 }
 
 .choice-grid__item--active {
   border-color: #12664f;
-  background: #eaf3ef;
+  background: #e7f3ed;
   color: #12664f;
+}
+
+.choice-grid__item:active {
+  border-color: #12664f;
+  background: #eef6f1;
 }
 
 .field-counter {
@@ -450,7 +479,8 @@ onLoad(loadProfile);
   display: flex;
   align-items: center;
   gap: 24rpx;
-  padding: 26rpx;
+  padding: 28rpx;
+  background: #f3f8f5;
 }
 
 .visibility-row__body {
@@ -474,8 +504,8 @@ onLoad(loadProfile);
 }
 
 .task-actions {
-  padding: 32rpx 0 12rpx;
-  border-top: 1rpx solid #dce4df;
+  padding: 36rpx 0 12rpx;
+  border-top: 1rpx solid #dfe6e2;
 }
 
 .task-actions .primary-button {

@@ -15,6 +15,7 @@ from app.db_models import (
 )
 from app.errors import ServiceError
 from app.schemas import (
+    ContactCardPayload,
     MatchPreferencesPayload,
     ProfilePayload,
     ProjectPayload,
@@ -508,6 +509,20 @@ def test_invitations_persist_accept_reject_expire_and_enforce_permissions(sql_st
     invitation = store.create_invitation(owner_id, published.id, role_id, invitee_id)
     assert store.create_invitation(owner_id, published.id, role_id, invitee_id) == invitation
     recreated = SqlAlchemyStore(factory, engine)
+    received, received_cursor = recreated.list_invitations(invitee_id, "RECEIVED", 20, None)
+    assert received_cursor is None
+    assert len(received) == 1
+    assert received[0].id == invitation.id
+    assert received[0].projectTitle == published.title
+    assert received[0].roleName == published.roles[0].name
+    assert received[0].box == "RECEIVED"
+    sent, sent_cursor = recreated.list_invitations(owner_id, "SENT", 20, None)
+    assert sent_cursor is None
+    assert sent[0].id == invitation.id
+    assert sent[0].box == "SENT"
+    outsider, outsider_cursor = recreated.list_invitations(outsider_id, "RECEIVED", 20, None)
+    assert outsider == []
+    assert outsider_cursor is None
     assert_service_error(
         "RESOURCE_NOT_FOUND",
         lambda: recreated.accept_invitation(outsider_id, invitation.id),
@@ -539,6 +554,9 @@ def test_invitations_persist_accept_reject_expire_and_enforce_permissions(sql_st
         row = session.get(InvitationRow, expiring.id)
         assert row is not None
         row.expires_at = db_now() - timedelta(seconds=1)
+    expired_items, _ = recreated.list_invitations(second_id, "RECEIVED", 20, None)
+    expired_item = next(item for item in expired_items if item.id == expiring.id)
+    assert expired_item.status == "EXPIRED"
     assert_service_error(
         "INVITATION_NOT_ACTIONABLE",
         lambda: recreated.accept_invitation(second_id, expiring.id),
@@ -557,6 +575,109 @@ def test_invitations_persist_accept_reject_expire_and_enforce_permissions(sql_st
     assert_service_error(
         "PROJECT_NOT_MATCHABLE",
         lambda: recreated.accept_invitation(second_id, closing.id),
+    )
+
+
+def test_contact_exchange_persists_pages_and_discloses_only_after_acceptance(sql_store) -> None:
+    store, factory, engine = sql_store
+    owner_id, _, _ = store.login("wechat:app-a:contact-owner")
+    requester_id, _, _ = store.login("wechat:app-a:contact-requester")
+    outsider_id, _, _ = store.login("wechat:app-a:contact-outsider")
+    requester_card = store.save_contact_card(
+        requester_id,
+        ContactCardPayload.model_validate(
+            {"methods": [{"type": "WECHAT", "value": "sql_member"}]}
+        ),
+        0,
+    )
+    assert requester_card.version == 1
+    assert_service_error(
+        "VERSION_CONFLICT",
+        lambda: store.save_contact_card(
+            requester_id,
+            ContactCardPayload.model_validate(
+                {"methods": [{"type": "WECHAT", "value": "sql_member_2"}]}
+            ),
+            0,
+        ),
+    )
+    owner_card = store.save_contact_card(
+        owner_id,
+        ContactCardPayload.model_validate(
+            {"methods": [{"type": "EMAIL", "value": "owner@example.com"}]}
+        ),
+        0,
+    )
+    assert owner_card.version == 1
+
+    project = store.create_project(owner_id, project_payload("联系方式交换项目"))
+    project = store.publish_project(owner_id, project.id, project.version)
+    role_id = project.roles[0].id
+    pending = store.create_contact_exchange_request(requester_id, project.id, role_id)
+    assert pending.status == "PENDING"
+    assert pending.peerContactCard is None
+    assert store.create_contact_exchange_request(requester_id, project.id, role_id) == pending
+    assert_service_error(
+        "RESOURCE_NOT_FOUND",
+        lambda: store.accept_contact_exchange_request(outsider_id, pending.id),
+    )
+
+    recreated = SqlAlchemyStore(factory, engine)
+    received, received_cursor = recreated.list_contact_exchange_requests(
+        owner_id, "RECEIVED", 20, None
+    )
+    assert received_cursor is None
+    assert received[0].id == pending.id
+    assert received[0].peerContactCard is None
+    accepted = recreated.accept_contact_exchange_request(owner_id, pending.id)
+    assert accepted.status == "ACCEPTED"
+    assert accepted.peerContactCard.methods[0].value == "sql_member"
+    assert recreated.accept_contact_exchange_request(owner_id, pending.id) == accepted
+    sent, sent_cursor = recreated.list_contact_exchange_requests(
+        requester_id, "SENT", 20, None
+    )
+    assert sent_cursor is None
+    assert sent[0].peerContactCard.methods[0].value == "owner@example.com"
+    assert recreated.get_contact_card(requester_id) == requester_card
+
+    extra_requests = []
+    for index in range(2):
+        extra_project = recreated.create_project(
+            owner_id, project_payload(f"联系方式分页项目 {index}")
+        )
+        extra_project = recreated.publish_project(
+            owner_id, extra_project.id, extra_project.version
+        )
+        extra_requests.append(
+            recreated.create_contact_exchange_request(
+                requester_id, extra_project.id, extra_project.roles[0].id
+            )
+        )
+    first_page, cursor = recreated.list_contact_exchange_requests(
+        requester_id, "SENT", 2, None
+    )
+    second_page, final_cursor = recreated.list_contact_exchange_requests(
+        requester_id, "SENT", 2, cursor
+    )
+    assert len(first_page) == 2
+    assert len(second_page) == 1
+    assert cursor is not None
+    assert final_cursor is None
+    assert {item.id for item in first_page + second_page} == {
+        pending.id,
+        *(item.id for item in extra_requests),
+    }
+
+    recreated.create_block(owner_id, requester_id)
+    blocked_project = recreated.create_project(owner_id, project_payload("拉黑边界项目"))
+    blocked_project = recreated.publish_project(
+        owner_id, blocked_project.id, blocked_project.version
+    )
+    assert_service_error(
+        "USER_BLOCKED",
+        lambda: recreated.create_contact_exchange_request(
+            requester_id, blocked_project.id, blocked_project.roles[0].id
+        ),
     )
 
 

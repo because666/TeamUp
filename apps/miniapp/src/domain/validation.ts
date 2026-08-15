@@ -1,4 +1,4 @@
-import type { FieldErrors, ProfileDraft, ProjectDraft } from "./models";
+import type { ContactCard, FieldErrors, ProfileDraft, ProjectDraft } from "./models";
 
 const isBlank = (value: string) => value.trim().length === 0;
 
@@ -52,6 +52,29 @@ export function validateProject(project: ProjectDraft): FieldErrors {
     }
   });
 
+  return errors;
+}
+
+export function validateContactCard(card: ContactCard): FieldErrors {
+  const errors: FieldErrors = {};
+  if (card.methods.length === 0) errors["CT-METHODS"] = "请至少填写一种联系方式";
+  const types = card.methods.map((method) => method.type);
+  if (new Set(types).size !== types.length) errors["CT-METHODS"] = "每种联系方式只能填写一次";
+  card.methods.forEach((method) => {
+    const value = method.value.trim();
+    if (method.type === "WECHAT" && !/^[A-Za-z][A-Za-z0-9_-]{5,19}$/.test(value)) {
+      errors["CT-WECHAT"] = "微信号需为 6-20 位，并以字母开头";
+    }
+    if (method.type === "QQ" && !/^[1-9][0-9]{4,11}$/.test(value)) {
+      errors["CT-QQ"] = "QQ 需为 5-12 位数字";
+    }
+    if (
+      method.type === "EMAIL"
+      && !/^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/.test(value)
+    ) {
+      errors["CT-EMAIL"] = "请填写有效邮箱地址";
+    }
+  });
   return errors;
 }
 

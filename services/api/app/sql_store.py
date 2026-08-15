@@ -14,6 +14,9 @@ from .db_models import (
     AccountDeletionRequestRow,
     AuditEventRow,
     BlockRow,
+    ContactCardRow,
+    ContactExchangeRequestRow,
+    ContactMethodRow,
     ConversationParticipantRow,
     ConversationRow,
     InvitationRow,
@@ -41,9 +44,13 @@ from .errors import ServiceError
 from .schemas import (
     AccountDeletionRequestData,
     BlockData,
+    ContactCardData,
+    ContactCardPayload,
+    ContactExchangeRequestData,
     ConversationData,
     InvitationAcceptData,
     InvitationData,
+    InvitationSummaryData,
     MessageData,
     MatchPreferencesData,
     MatchPreferencesPayload,
@@ -245,6 +252,273 @@ class SqlAlchemyStore:
         with self._session_factory() as session:
             return self._users_blocked(session, first_user_id, second_user_id)
 
+    def get_contact_card(self, user_id: str) -> ContactCardData | None:
+        with self._session_factory() as session:
+            row = session.scalar(self._contact_card_query().where(ContactCardRow.user_id == user_id))
+            return self._contact_card_data(row) if row is not None else None
+
+    def save_contact_card(
+        self, user_id: str, payload: ContactCardPayload, version: int
+    ) -> ContactCardData:
+        with self._session_factory.begin() as session:
+            row = session.scalar(
+                self._contact_card_query()
+                .where(ContactCardRow.user_id == user_id)
+                .with_for_update()
+            )
+            timestamp = db_now()
+            if row is None:
+                if version != 0:
+                    raise ServiceError(
+                        "VERSION_CONFLICT", "联系名片已被更新，请重新加载后再保存。", 409
+                    )
+                row = ContactCardRow(user_id=user_id, version=1, updated_at=timestamp)
+                session.add(row)
+            else:
+                if row.version != version:
+                    raise ServiceError(
+                        "VERSION_CONFLICT", "联系名片版本已失效，请重新加载。", 409
+                    )
+                row.version += 1
+                row.updated_at = timestamp
+                row.methods.clear()
+                session.flush()
+            row.methods = [
+                ContactMethodRow(method_type=method.type, value=method.value)
+                for method in payload.methods
+            ]
+            session.flush()
+            return self._contact_card_data(row)
+
+    def create_contact_exchange_request(
+        self, requester_id: str, project_id: str, role_id: str
+    ) -> ContactExchangeRequestData:
+        with self._session_factory.begin() as session:
+            project = session.scalar(
+                select(ProjectRow).where(ProjectRow.id == project_id).with_for_update()
+            )
+            if project is None or project.status != "PUBLISHED":
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可联系。", 404)
+            recipient_id = project.owner_id
+            if requester_id == recipient_id:
+                raise ServiceError(
+                    "CANNOT_REQUEST_CONTACT_SELF", "不能向自己申请交换联系方式。", 422
+                )
+            users = list(
+                session.scalars(
+                    select(UserRow)
+                    .where(
+                        UserRow.id.in_(sorted((requester_id, recipient_id))),
+                        UserRow.status == "ACTIVE",
+                    )
+                    .order_by(UserRow.id)
+                    .with_for_update()
+                )
+            )
+            if len(users) != 2:
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可联系。", 404)
+            role = session.scalar(
+                select(ProjectRoleRow)
+                .where(ProjectRoleRow.project_id == project_id, ProjectRoleRow.id == role_id)
+                .with_for_update()
+            )
+            if role is None:
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目或岗位不存在。", 404)
+            try:
+                self._require_open_role_capacity(session, role)
+            except ServiceError as error:
+                if error.code in {"ROLE_NOT_OPEN", "ROLE_FULL"}:
+                    raise ServiceError("ROLE_NOT_OPEN", "岗位当前不接受联系申请。", 409) from None
+                raise
+            if self._active_member(session, project_id, requester_id) is not None:
+                raise ServiceError("MEMBER_ALREADY_EXISTS", "你已经是该项目成员。", 409)
+            requester_card = session.scalar(
+                select(ContactCardRow.user_id).where(ContactCardRow.user_id == requester_id)
+            )
+            if requester_card is None:
+                raise ServiceError("CONTACT_CARD_REQUIRED", "请先填写自己的联系方式。", 409)
+            if self._users_blocked(session, requester_id, recipient_id):
+                raise ServiceError("USER_BLOCKED", "当前用户关系不允许交换联系方式。", 409)
+
+            existing_accepted = session.scalar(
+                select(ContactExchangeRequestRow)
+                .where(
+                    ContactExchangeRequestRow.requester_id == requester_id,
+                    ContactExchangeRequestRow.project_id == project_id,
+                    ContactExchangeRequestRow.role_id == role_id,
+                    ContactExchangeRequestRow.status == "ACCEPTED",
+                )
+                .order_by(
+                    ContactExchangeRequestRow.created_at.desc(),
+                    ContactExchangeRequestRow.id.desc(),
+                )
+                .limit(1)
+            )
+            if existing_accepted is not None:
+                return self._contact_exchange_request_data(session, existing_accepted, requester_id)
+            pending_key = self._contact_exchange_pending_key(requester_id, project_id, role_id)
+            existing_pending = session.scalar(
+                select(ContactExchangeRequestRow)
+                .where(ContactExchangeRequestRow.pending_key == pending_key)
+                .with_for_update()
+            )
+            if existing_pending is not None:
+                return self._contact_exchange_request_data(session, existing_pending, requester_id)
+            row = ContactExchangeRequestRow(
+                id=f"cer_{uuid4().hex}",
+                project_id=project_id,
+                role_id=role_id,
+                requester_id=requester_id,
+                recipient_id=recipient_id,
+                status="PENDING",
+                pending_key=pending_key,
+                created_at=db_now(),
+                responded_at=None,
+            )
+            session.add(row)
+            session.flush()
+            return self._contact_exchange_request_data(session, row, requester_id)
+
+    def list_contact_exchange_requests(
+        self, user_id: str, box: str, limit: int, cursor: str | None
+    ) -> tuple[list[ContactExchangeRequestData], str | None]:
+        with self._session_factory() as session:
+            participant_column = (
+                ContactExchangeRequestRow.requester_id
+                if box == "SENT"
+                else ContactExchangeRequestRow.recipient_id
+            )
+            query = select(ContactExchangeRequestRow).where(participant_column == user_id)
+            if cursor:
+                cursor_time, cursor_id = self._decode_cursor(cursor)
+                query = query.where(
+                    or_(
+                        ContactExchangeRequestRow.created_at < cursor_time,
+                        (ContactExchangeRequestRow.created_at == cursor_time)
+                        & (ContactExchangeRequestRow.id < cursor_id),
+                    )
+                )
+            rows = list(
+                session.scalars(
+                    query.order_by(
+                        ContactExchangeRequestRow.created_at.desc(),
+                        ContactExchangeRequestRow.id.desc(),
+                    ).limit(limit + 1)
+                )
+            )
+            has_more = len(rows) > limit
+            page = rows[:limit]
+            data = [self._contact_exchange_request_data(session, row, user_id) for row in page]
+            next_cursor = (
+                self._encode_cursor(page[-1].created_at, page[-1].id)
+                if has_more and page
+                else None
+            )
+            return data, next_cursor
+
+    def accept_contact_exchange_request(
+        self, recipient_id: str, request_id: str
+    ) -> ContactExchangeRequestData:
+        with self._session_factory.begin() as session:
+            row = session.scalar(
+                select(ContactExchangeRequestRow)
+                .where(ContactExchangeRequestRow.id == request_id)
+                .with_for_update()
+            )
+            if row is None or row.recipient_id != recipient_id:
+                raise ServiceError("RESOURCE_NOT_FOUND", "联系申请不存在或不可见。", 404)
+            if row.status == "ACCEPTED":
+                return self._contact_exchange_request_data(session, row, recipient_id)
+            if row.status != "PENDING":
+                raise ServiceError(
+                    "CONTACT_REQUEST_NOT_ACTIONABLE", "联系申请已处理，当前不能同意。", 409
+                )
+            project = session.scalar(
+                select(ProjectRow).where(ProjectRow.id == row.project_id).with_for_update()
+            )
+            role = session.scalar(
+                select(ProjectRoleRow)
+                .where(
+                    ProjectRoleRow.project_id == row.project_id,
+                    ProjectRoleRow.id == row.role_id,
+                )
+                .with_for_update()
+            )
+            if project is None or project.status != "PUBLISHED" or role is None:
+                raise ServiceError(
+                    "CONTACT_REQUEST_NOT_ACTIONABLE", "项目或岗位当前不允许交换联系方式。", 409
+                )
+            try:
+                self._require_open_role_capacity(session, role)
+            except ServiceError as error:
+                if error.code in {"ROLE_NOT_OPEN", "ROLE_FULL"}:
+                    raise ServiceError(
+                        "CONTACT_REQUEST_NOT_ACTIONABLE", "项目或岗位当前不允许交换联系方式。", 409
+                    ) from None
+                raise
+            if self._users_blocked(session, row.requester_id, row.recipient_id):
+                raise ServiceError("USER_BLOCKED", "当前用户关系不允许交换联系方式。", 409)
+            card_user_ids = set(
+                session.scalars(
+                    select(ContactCardRow.user_id).where(
+                        ContactCardRow.user_id.in_(sorted((row.requester_id, row.recipient_id)))
+                    )
+                )
+            )
+            if card_user_ids != {row.requester_id, row.recipient_id}:
+                raise ServiceError("CONTACT_CARD_REQUIRED", "双方都需要先填写联系方式。", 409)
+            row.status = "ACCEPTED"
+            row.pending_key = None
+            row.responded_at = db_now()
+            session.flush()
+            return self._contact_exchange_request_data(session, row, recipient_id)
+
+    def reject_contact_exchange_request(
+        self, recipient_id: str, request_id: str
+    ) -> ContactExchangeRequestData:
+        with self._session_factory.begin() as session:
+            row = session.scalar(
+                select(ContactExchangeRequestRow)
+                .where(ContactExchangeRequestRow.id == request_id)
+                .with_for_update()
+            )
+            if row is None or row.recipient_id != recipient_id:
+                raise ServiceError("RESOURCE_NOT_FOUND", "联系申请不存在或不可见。", 404)
+            if row.status == "REJECTED":
+                return self._contact_exchange_request_data(session, row, recipient_id)
+            if row.status != "PENDING":
+                raise ServiceError(
+                    "CONTACT_REQUEST_NOT_ACTIONABLE", "联系申请已处理，当前不能拒绝。", 409
+                )
+            row.status = "REJECTED"
+            row.pending_key = None
+            row.responded_at = db_now()
+            session.flush()
+            return self._contact_exchange_request_data(session, row, recipient_id)
+
+    def cancel_contact_exchange_request(
+        self, requester_id: str, request_id: str
+    ) -> ContactExchangeRequestData:
+        with self._session_factory.begin() as session:
+            row = session.scalar(
+                select(ContactExchangeRequestRow)
+                .where(ContactExchangeRequestRow.id == request_id)
+                .with_for_update()
+            )
+            if row is None or row.requester_id != requester_id:
+                raise ServiceError("RESOURCE_NOT_FOUND", "联系申请不存在或不可见。", 404)
+            if row.status == "CANCELLED":
+                return self._contact_exchange_request_data(session, row, requester_id)
+            if row.status != "PENDING":
+                raise ServiceError(
+                    "CONTACT_REQUEST_NOT_ACTIONABLE", "联系申请已处理，当前不能取消。", 409
+                )
+            row.status = "CANCELLED"
+            row.pending_key = None
+            row.responded_at = db_now()
+            session.flush()
+            return self._contact_exchange_request_data(session, row, requester_id)
+
     def create_report(self, reporter_id: str, payload: ReportRequest, request_id: str) -> ReportData:
         with self._session_factory.begin() as session:
             reporter = session.scalar(
@@ -412,6 +686,48 @@ class SqlAlchemyStore:
             session.add(row)
             session.flush()
             return self._invitation_data(row)
+
+    def list_invitations(
+        self, user_id: str, box: str, limit: int, cursor: str | None
+    ) -> tuple[list[InvitationSummaryData], str | None]:
+        with self._session_factory.begin() as session:
+            participant_column = (
+                InvitationRow.inviter_id if box == "SENT" else InvitationRow.invitee_id
+            )
+            query = select(InvitationRow).where(participant_column == user_id)
+            if cursor:
+                cursor_time, cursor_id = self._decode_cursor(cursor)
+                query = query.where(
+                    or_(
+                        InvitationRow.created_at < cursor_time,
+                        (InvitationRow.created_at == cursor_time)
+                        & (InvitationRow.id < cursor_id),
+                    )
+                )
+            rows = list(
+                session.scalars(
+                    query.order_by(
+                        InvitationRow.created_at.desc(),
+                        InvitationRow.id.desc(),
+                    ).limit(limit + 1)
+                )
+            )
+            timestamp = db_now()
+            for row in rows:
+                if row.status == "PENDING" and row.expires_at <= timestamp:
+                    row.status = "EXPIRED"
+                    row.pending_key = None
+                    row.responded_at = timestamp
+            session.flush()
+            has_more = len(rows) > limit
+            page = rows[:limit]
+            data = [self._invitation_summary_data(session, row, user_id) for row in page]
+            next_cursor = (
+                self._encode_cursor(page[-1].created_at, page[-1].id)
+                if has_more and page
+                else None
+            )
+            return data, next_cursor
 
     def accept_invitation(self, invitee_id: str, invitation_id: str) -> InvitationAcceptData:
         # Locate the project outside the write transaction. On MySQL REPEATABLE READ,
@@ -1311,6 +1627,76 @@ class SqlAlchemyStore:
         return False
 
     @staticmethod
+    def _contact_card_query() -> Select[tuple[ContactCardRow]]:
+        return select(ContactCardRow).options(selectinload(ContactCardRow.methods))
+
+    @staticmethod
+    def _contact_card_data(row: ContactCardRow) -> ContactCardData:
+        type_order = {"WECHAT": 0, "QQ": 1, "EMAIL": 2}
+        return ContactCardData.model_validate(
+            {
+                "methods": [
+                    {"type": method.method_type, "value": method.value}
+                    for method in sorted(
+                        row.methods, key=lambda item: type_order.get(item.method_type, 99)
+                    )
+                ],
+                "version": row.version,
+                "updatedAt": api_datetime(row.updated_at),
+            }
+        )
+
+    def _contact_exchange_request_data(
+        self, session: Session, row: ContactExchangeRequestRow, viewer_id: str
+    ) -> ContactExchangeRequestData:
+        if viewer_id == row.requester_id:
+            box = "SENT"
+            peer_id = row.recipient_id
+        elif viewer_id == row.recipient_id:
+            box = "RECEIVED"
+            peer_id = row.requester_id
+        else:
+            raise ServiceError("RESOURCE_NOT_FOUND", "联系申请不存在或不可见。", 404)
+        project = session.get(ProjectRow, row.project_id)
+        role = session.scalar(
+            select(ProjectRoleRow).where(
+                ProjectRoleRow.project_id == row.project_id,
+                ProjectRoleRow.id == row.role_id,
+            )
+        )
+        peer_profile = session.get(ProfileRow, peer_id)
+        peer_card = (
+            session.scalar(
+                self._contact_card_query().where(ContactCardRow.user_id == peer_id)
+            )
+            if row.status == "ACCEPTED"
+            else None
+        )
+        return ContactExchangeRequestData.model_validate(
+            {
+                "id": row.id,
+                "projectId": row.project_id,
+                "roleId": row.role_id,
+                "projectTitle": project.title if project is not None else "项目",
+                "roleName": role.name if role is not None else "招募岗位",
+                "requesterUserId": row.requester_id,
+                "recipientUserId": row.recipient_id,
+                "box": box,
+                "peerDisplayName": peer_profile.nickname if peer_profile is not None else "TeamUp 用户",
+                "status": row.status,
+                "peerContactCard": self._contact_card_data(peer_card) if peer_card is not None else None,
+                "createdAt": api_datetime(row.created_at),
+                "respondedAt": api_datetime(row.responded_at),
+            }
+        )
+
+    @staticmethod
+    def _contact_exchange_pending_key(
+        requester_id: str, project_id: str, role_id: str
+    ) -> str:
+        return f"{requester_id}:{project_id}:{role_id}"
+
+    @staticmethod
     def _profile_query() -> Select[tuple[ProfileRow]]:
         return select(ProfileRow).options(selectinload(ProfileRow.skills), selectinload(ProfileRow.scenarios))
 
@@ -1643,6 +2029,37 @@ class SqlAlchemyStore:
                 "expiresAt": api_datetime(row.expires_at),
                 "createdAt": api_datetime(row.created_at),
                 "respondedAt": api_datetime(row.responded_at),
+            }
+        )
+
+    def _invitation_summary_data(
+        self, session: Session, row: InvitationRow, viewer_id: str
+    ) -> InvitationSummaryData:
+        if viewer_id == row.inviter_id:
+            box = "SENT"
+            peer_id = row.invitee_id
+        elif viewer_id == row.invitee_id:
+            box = "RECEIVED"
+            peer_id = row.inviter_id
+        else:
+            raise ServiceError("RESOURCE_NOT_FOUND", "邀请不存在或不可见。", 404)
+        project = session.get(ProjectRow, row.project_id)
+        role = session.scalar(
+            select(ProjectRoleRow).where(
+                ProjectRoleRow.project_id == row.project_id,
+                ProjectRoleRow.id == row.role_id,
+            )
+        )
+        peer_profile = session.get(ProfileRow, peer_id)
+        return InvitationSummaryData.model_validate(
+            {
+                **self._invitation_data(row).model_dump(),
+                "projectTitle": project.title if project is not None else "项目",
+                "roleName": role.name if role is not None else "招募岗位",
+                "box": box,
+                "peerDisplayName": (
+                    peer_profile.nickname if peer_profile is not None else "TeamUp 用户"
+                ),
             }
         )
 

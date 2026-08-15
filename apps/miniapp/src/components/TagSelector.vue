@@ -43,28 +43,43 @@ function toggle(option: string): void {
 .tag-selector {
   display: flex;
   flex-wrap: wrap;
-  gap: 14rpx;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 14rpx 12rpx;
 }
 
 .tag-selector__item {
   display: inline-flex;
   width: auto;
-  min-height: 70rpx;
+  min-height: 72rpx;
+  flex: 0 0 auto;
   align-items: center;
+  justify-content: center;
   gap: 7rpx;
-  padding: 0 22rpx;
-  border: 1rpx solid #cad5cf;
-  border-radius: 6rpx;
+  padding: 0 20rpx;
+  border: 1rpx solid #c7d3cd;
+  border-radius: 8rpx;
   background: #ffffff;
   color: #435149;
   font-size: 24rpx;
   font-weight: 600;
-  line-height: 70rpx;
+  line-height: 1.2;
 }
 
 .tag-selector__item--selected {
   border-color: #12664f;
   background: #12664f;
+  color: #ffffff;
+}
+
+.tag-selector__item:active {
+  border-color: #12664f;
+  background: #eaf3ef;
+  color: #12664f;
+}
+
+.tag-selector__item--selected:active {
+  background: #0e5743;
   color: #ffffff;
 }
 </style>

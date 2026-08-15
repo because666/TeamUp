@@ -22,6 +22,7 @@ class InMemoryRateLimiter:
         self.rules = rules or {
             "auth.login": RateLimitRule(60, 60),
             "safety.report": RateLimitRule(60, 30),
+            "contact.exchange": RateLimitRule(60, 30),
             "team.invitation": RateLimitRule(60, 30),
             "messages.send": RateLimitRule(60, 60),
         }

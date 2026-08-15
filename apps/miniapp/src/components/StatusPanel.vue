@@ -46,9 +46,9 @@ const iconColor = computed(() => {
 <style scoped>
 .status-panel {
   display: flex;
-  gap: 20rpx;
-  padding: 26rpx;
-  border: 1rpx solid #d7e0dc;
+  gap: 18rpx;
+  padding: 28rpx;
+  border: 1rpx solid #d8e2dd;
   border-radius: 8rpx;
   background: #ffffff;
 }
@@ -85,7 +85,7 @@ const iconColor = computed(() => {
 .status-panel__title {
   display: block;
   color: #26352f;
-  font-size: 27rpx;
+  font-size: 26rpx;
   font-weight: 700;
   line-height: 1.45;
 }
@@ -99,15 +99,19 @@ const iconColor = computed(() => {
 }
 
 .status-panel__action {
-  min-height: 64rpx;
+  display: inline-flex;
+  width: auto;
+  min-height: 68rpx;
+  align-items: center;
+  justify-content: center;
   margin-top: 18rpx;
   padding: 0 22rpx;
-  border: 1rpx solid #b8c8c0;
-  border-radius: 6rpx;
+  border: 1rpx solid #b7c8c0;
+  border-radius: 8rpx;
   background: #ffffff;
   color: #12664f;
   font-size: 23rpx;
   font-weight: 700;
-  line-height: 64rpx;
+  line-height: 1.2;
 }
 </style>

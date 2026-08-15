@@ -51,7 +51,7 @@
           </view>
           <view class="next-step">
             <view class="next-step__number">2</view>
-            <text>匹配和消息能力会在相应契约确认后接入。</text>
+            <text>候选人可从开放岗位申请交换联系方式。</text>
           </view>
         </view>
 

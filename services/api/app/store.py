@@ -10,9 +10,14 @@ from .errors import ServiceError
 from .schemas import (
     AccountDeletionRequestData,
     BlockData,
+    ContactCardData,
+    ContactCardPayload,
+    ContactExchangeRequestData,
+    ContactExchangeRequestRecord,
     ConversationData,
     InvitationAcceptData,
     InvitationData,
+    InvitationSummaryData,
     MessageData,
     MatchPreferencesData,
     MatchPreferencesPayload,
@@ -52,9 +57,31 @@ class Store(Protocol):
     def create_block(self, blocker_id: str, blocked_id: str) -> BlockData: ...
     def remove_block(self, blocker_id: str, blocked_id: str) -> bool: ...
     def users_blocked(self, first_user_id: str, second_user_id: str) -> bool: ...
+    def get_contact_card(self, user_id: str) -> ContactCardData | None: ...
+    def save_contact_card(
+        self, user_id: str, payload: ContactCardPayload, version: int
+    ) -> ContactCardData: ...
+    def create_contact_exchange_request(
+        self, requester_id: str, project_id: str, role_id: str
+    ) -> ContactExchangeRequestData: ...
+    def list_contact_exchange_requests(
+        self, user_id: str, box: str, limit: int, cursor: str | None
+    ) -> tuple[list[ContactExchangeRequestData], str | None]: ...
+    def accept_contact_exchange_request(
+        self, recipient_id: str, request_id: str
+    ) -> ContactExchangeRequestData: ...
+    def reject_contact_exchange_request(
+        self, recipient_id: str, request_id: str
+    ) -> ContactExchangeRequestData: ...
+    def cancel_contact_exchange_request(
+        self, requester_id: str, request_id: str
+    ) -> ContactExchangeRequestData: ...
     def create_invitation(
         self, inviter_id: str, project_id: str, role_id: str, invitee_id: str
     ) -> InvitationData: ...
+    def list_invitations(
+        self, user_id: str, box: str, limit: int, cursor: str | None
+    ) -> tuple[list[InvitationSummaryData], str | None]: ...
     def accept_invitation(self, invitee_id: str, invitation_id: str) -> InvitationAcceptData: ...
     def reject_invitation(self, invitee_id: str, invitation_id: str) -> InvitationData: ...
     def create_conversation(
@@ -133,6 +160,8 @@ class MemoryStore:
         self.pending_deletion_by_user: dict[str, str] = {}
         self.audit_events: list[dict[str, object]] = []
         self.blocks: dict[tuple[str, str], BlockData] = {}
+        self.contact_cards: dict[str, ContactCardData] = {}
+        self.contact_exchange_requests: dict[str, ContactExchangeRequestRecord] = {}
         self.invitations: dict[str, InvitationData] = {}
         self.conversations: dict[str, ConversationData] = {}
         self.messages: dict[str, MessageData] = {}
@@ -227,6 +256,170 @@ class MemoryStore:
                 first_user_id,
             ) in self.blocks
 
+    def get_contact_card(self, user_id: str) -> ContactCardData | None:
+        with self._lock:
+            card = self.contact_cards.get(user_id)
+            return deepcopy(card) if card is not None else None
+
+    def save_contact_card(
+        self, user_id: str, payload: ContactCardPayload, version: int
+    ) -> ContactCardData:
+        with self._lock:
+            existing = self.contact_cards.get(user_id)
+            if existing is None and version != 0:
+                raise ServiceError("VERSION_CONFLICT", "联系名片已被更新，请重新加载后再保存。", 409)
+            if existing is not None and existing.version != version:
+                raise ServiceError("VERSION_CONFLICT", "联系名片版本已失效，请重新加载。", 409)
+            saved = ContactCardData(
+                methods=deepcopy(payload.methods),
+                version=1 if existing is None else existing.version + 1,
+                updatedAt=now_utc(),
+            )
+            self.contact_cards[user_id] = saved
+            return deepcopy(saved)
+
+    def create_contact_exchange_request(
+        self, requester_id: str, project_id: str, role_id: str
+    ) -> ContactExchangeRequestData:
+        with self._lock:
+            project = self.projects.get(project_id)
+            if project is None or project.status != "PUBLISHED":
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可联系。", 404)
+            recipient_id = project.ownerId
+            if requester_id == recipient_id:
+                raise ServiceError("CANNOT_REQUEST_CONTACT_SELF", "不能向自己申请交换联系方式。", 422)
+            if self.user_statuses.get(recipient_id, "ACTIVE") != "ACTIVE":
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目不存在或不可联系。", 404)
+            role = next((item for item in project.roles if item.id == role_id), None)
+            if role is None:
+                raise ServiceError("RESOURCE_NOT_FOUND", "项目或岗位不存在。", 404)
+            if role.status != "OPEN" or role.remainingCount <= 0:
+                raise ServiceError("ROLE_NOT_OPEN", "岗位当前不接受联系申请。", 409)
+            if any(
+                member.projectId == project_id
+                and member.userId == requester_id
+                and member.status == "ACTIVE"
+                for member in self.project_members.values()
+            ):
+                raise ServiceError("MEMBER_ALREADY_EXISTS", "你已经是该项目成员。", 409)
+            if requester_id not in self.contact_cards:
+                raise ServiceError("CONTACT_CARD_REQUIRED", "请先填写自己的联系方式。", 409)
+            if self.users_blocked(requester_id, recipient_id):
+                raise ServiceError("USER_BLOCKED", "当前用户关系不允许交换联系方式。", 409)
+            for item in self.contact_exchange_requests.values():
+                if (
+                    item.requesterUserId == requester_id
+                    and item.projectId == project_id
+                    and item.roleId == role_id
+                    and item.status in {"PENDING", "ACCEPTED"}
+                ):
+                    return self._contact_exchange_request_data(item, requester_id)
+            record = ContactExchangeRequestRecord(
+                id=f"cer_{uuid4().hex}",
+                projectId=project_id,
+                roleId=role_id,
+                requesterUserId=requester_id,
+                recipientUserId=recipient_id,
+                status="PENDING",
+                createdAt=now_utc(),
+                respondedAt=None,
+            )
+            self.contact_exchange_requests[record.id] = record
+            return self._contact_exchange_request_data(record, requester_id)
+
+    def list_contact_exchange_requests(
+        self, user_id: str, box: str, limit: int, cursor: str | None
+    ) -> tuple[list[ContactExchangeRequestData], str | None]:
+        with self._lock:
+            attribute = "requesterUserId" if box == "SENT" else "recipientUserId"
+            records = sorted(
+                (
+                    item
+                    for item in self.contact_exchange_requests.values()
+                    if getattr(item, attribute) == user_id
+                ),
+                key=lambda item: (item.createdAt, item.id),
+                reverse=True,
+            )
+            if cursor:
+                cursor_time, cursor_id = self._decode_cursor(cursor)
+                records = [item for item in records if (item.createdAt, item.id) < (cursor_time, cursor_id)]
+            page = records[:limit]
+            has_more = len(records) > limit
+            return [self._contact_exchange_request_data(item, user_id) for item in page], (
+                self._encode_cursor(page[-1].createdAt, page[-1].id) if has_more and page else None
+            )
+
+    def accept_contact_exchange_request(
+        self, recipient_id: str, request_id: str
+    ) -> ContactExchangeRequestData:
+        with self._lock:
+            record = self._contact_exchange_request_for_recipient(request_id, recipient_id)
+            if record.status == "ACCEPTED":
+                return self._contact_exchange_request_data(record, recipient_id)
+            if record.status != "PENDING":
+                raise ServiceError(
+                    "CONTACT_REQUEST_NOT_ACTIONABLE", "联系申请已处理，当前不能同意。", 409
+                )
+            project = self.projects.get(record.projectId)
+            role = (
+                next((item for item in project.roles if item.id == record.roleId), None)
+                if project is not None
+                else None
+            )
+            if (
+                project is None
+                or project.status != "PUBLISHED"
+                or role is None
+                or role.status != "OPEN"
+                or role.remainingCount <= 0
+            ):
+                raise ServiceError(
+                    "CONTACT_REQUEST_NOT_ACTIONABLE", "项目或岗位当前不允许交换联系方式。", 409
+                )
+            if self.users_blocked(record.requesterUserId, record.recipientUserId):
+                raise ServiceError("USER_BLOCKED", "当前用户关系不允许交换联系方式。", 409)
+            if (
+                record.requesterUserId not in self.contact_cards
+                or record.recipientUserId not in self.contact_cards
+            ):
+                raise ServiceError("CONTACT_CARD_REQUIRED", "双方都需要先填写联系方式。", 409)
+            accepted = record.model_copy(update={"status": "ACCEPTED", "respondedAt": now_utc()})
+            self.contact_exchange_requests[request_id] = accepted
+            return self._contact_exchange_request_data(accepted, recipient_id)
+
+    def reject_contact_exchange_request(
+        self, recipient_id: str, request_id: str
+    ) -> ContactExchangeRequestData:
+        with self._lock:
+            record = self._contact_exchange_request_for_recipient(request_id, recipient_id)
+            if record.status == "REJECTED":
+                return self._contact_exchange_request_data(record, recipient_id)
+            if record.status != "PENDING":
+                raise ServiceError(
+                    "CONTACT_REQUEST_NOT_ACTIONABLE", "联系申请已处理，当前不能拒绝。", 409
+                )
+            rejected = record.model_copy(update={"status": "REJECTED", "respondedAt": now_utc()})
+            self.contact_exchange_requests[request_id] = rejected
+            return self._contact_exchange_request_data(rejected, recipient_id)
+
+    def cancel_contact_exchange_request(
+        self, requester_id: str, request_id: str
+    ) -> ContactExchangeRequestData:
+        with self._lock:
+            record = self.contact_exchange_requests.get(request_id)
+            if record is None or record.requesterUserId != requester_id:
+                raise ServiceError("RESOURCE_NOT_FOUND", "联系申请不存在或不可见。", 404)
+            if record.status == "CANCELLED":
+                return self._contact_exchange_request_data(record, requester_id)
+            if record.status != "PENDING":
+                raise ServiceError(
+                    "CONTACT_REQUEST_NOT_ACTIONABLE", "联系申请已处理，当前不能取消。", 409
+                )
+            cancelled = record.model_copy(update={"status": "CANCELLED", "respondedAt": now_utc()})
+            self.contact_exchange_requests[request_id] = cancelled
+            return self._contact_exchange_request_data(cancelled, requester_id)
+
     def create_invitation(
         self, inviter_id: str, project_id: str, role_id: str, invitee_id: str
     ) -> InvitationData:
@@ -280,6 +473,40 @@ class MemoryStore:
             )
             self.invitations[invitation.id] = invitation
             return deepcopy(invitation)
+
+    def list_invitations(
+        self, user_id: str, box: str, limit: int, cursor: str | None
+    ) -> tuple[list[InvitationSummaryData], str | None]:
+        with self._lock:
+            participant_field = "inviterUserId" if box == "SENT" else "inviteeUserId"
+            timestamp = now_utc()
+            records: list[InvitationData] = []
+            for invitation_id, invitation in self.invitations.items():
+                if getattr(invitation, participant_field) != user_id:
+                    continue
+                if invitation.status == "PENDING" and invitation.expiresAt <= timestamp:
+                    invitation = invitation.model_copy(
+                        update={"status": "EXPIRED", "respondedAt": timestamp}
+                    )
+                    self.invitations[invitation_id] = invitation
+                records.append(invitation)
+            records.sort(key=lambda item: (item.createdAt, item.id), reverse=True)
+            if cursor:
+                cursor_time, cursor_id = self._decode_cursor(cursor)
+                records = [
+                    item
+                    for item in records
+                    if (item.createdAt, item.id) < (cursor_time, cursor_id)
+                ]
+            page = records[:limit]
+            has_more = len(records) > limit
+            data = [self._invitation_summary_data(item, user_id) for item in page]
+            next_cursor = (
+                self._encode_cursor(page[-1].createdAt, page[-1].id)
+                if has_more and page
+                else None
+            )
+            return data, next_cursor
 
     def accept_invitation(self, invitee_id: str, invitation_id: str) -> InvitationAcceptData:
         with self._lock:
@@ -992,11 +1219,74 @@ class MemoryStore:
         if project.ownerId != user_id:
             raise ServiceError("FORBIDDEN", "你没有权限操作该项目。", 403)
 
+    def _contact_exchange_request_for_recipient(
+        self, request_id: str, recipient_id: str
+    ) -> ContactExchangeRequestRecord:
+        record = self.contact_exchange_requests.get(request_id)
+        if record is None or record.recipientUserId != recipient_id:
+            raise ServiceError("RESOURCE_NOT_FOUND", "联系申请不存在或不可见。", 404)
+        return record
+
+    def _contact_exchange_request_data(
+        self, record: ContactExchangeRequestRecord, viewer_id: str
+    ) -> ContactExchangeRequestData:
+        if viewer_id == record.requesterUserId:
+            box = "SENT"
+            peer_id = record.recipientUserId
+        elif viewer_id == record.recipientUserId:
+            box = "RECEIVED"
+            peer_id = record.requesterUserId
+        else:
+            raise ServiceError("RESOURCE_NOT_FOUND", "联系申请不存在或不可见。", 404)
+        project = self.projects.get(record.projectId)
+        role = (
+            next((item for item in project.roles if item.id == record.roleId), None)
+            if project is not None
+            else None
+        )
+        peer_profile = self.profiles.get(peer_id)
+        return ContactExchangeRequestData(
+            **record.model_dump(),
+            projectTitle=project.title if project is not None else "项目",
+            roleName=role.name if role is not None else "招募岗位",
+            box=box,
+            peerDisplayName=peer_profile.nickname if peer_profile is not None else "TeamUp 用户",
+            peerContactCard=(
+                deepcopy(self.contact_cards.get(peer_id)) if record.status == "ACCEPTED" else None
+            ),
+        )
+
     def _invitation_for_invitee(self, invitation_id: str, invitee_id: str) -> InvitationData:
         invitation = self.invitations.get(invitation_id)
         if invitation is None or invitation.inviteeUserId != invitee_id:
             raise ServiceError("RESOURCE_NOT_FOUND", "邀请不存在或不可见。", 404)
         return invitation
+
+    def _invitation_summary_data(
+        self, invitation: InvitationData, viewer_id: str
+    ) -> InvitationSummaryData:
+        if viewer_id == invitation.inviterUserId:
+            box = "SENT"
+            peer_id = invitation.inviteeUserId
+        elif viewer_id == invitation.inviteeUserId:
+            box = "RECEIVED"
+            peer_id = invitation.inviterUserId
+        else:
+            raise ServiceError("RESOURCE_NOT_FOUND", "邀请不存在或不可见。", 404)
+        project = self.projects.get(invitation.projectId)
+        role = (
+            next((item for item in project.roles if item.id == invitation.roleId), None)
+            if project is not None
+            else None
+        )
+        peer_profile = self.profiles.get(peer_id)
+        return InvitationSummaryData(
+            **invitation.model_dump(),
+            projectTitle=project.title if project is not None else "项目",
+            roleName=role.name if role is not None else "招募岗位",
+            box=box,
+            peerDisplayName=peer_profile.nickname if peer_profile is not None else "TeamUp 用户",
+        )
 
     def _require_conversation_participant(
         self, conversation_id: str, requester_id: str

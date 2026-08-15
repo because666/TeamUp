@@ -59,6 +59,7 @@
           v-else
           :key="project.id"
           :project="project"
+          @select="openProjectDetail"
         />
       </view>
     </view>
@@ -75,7 +76,7 @@ import ProjectCard from "@/components/ProjectCard.vue";
 import StatusPanel from "@/components/StatusPanel.vue";
 import { discoveryProjects } from "@/domain/fixtures";
 import { isFixtureMode } from "@/services/runtime";
-import { openPage, routes } from "@/utils/navigation";
+import { openPage, projectDetailRoute, routes } from "@/utils/navigation";
 
 const fixture = isFixtureMode();
 const query = ref("");
@@ -84,6 +85,10 @@ const segments = [
   { key: "project" as const, label: "找项目" },
   { key: "talent" as const, label: "找队友" },
 ];
+
+function openProjectDetail(projectId: string): void {
+  openPage(projectDetailRoute(projectId));
+}
 
 const filteredProjects = computed(() => {
   if (!fixture) return [];

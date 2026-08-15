@@ -144,6 +144,32 @@ class ProfileScenarioRow(Base):
     scenario_name: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
+class ContactCardRow(Base):
+    __tablename__ = "contact_cards"
+
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+    methods: Mapped[list[ContactMethodRow]] = relationship(cascade="all, delete-orphan", lazy="selectin")
+
+    __table_args__ = (CheckConstraint("version > 0", name="ck_contact_cards_version"),)
+
+
+class ContactMethodRow(Base):
+    __tablename__ = "contact_methods"
+
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("contact_cards.user_id", ondelete="CASCADE"), primary_key=True
+    )
+    method_type: Mapped[str] = mapped_column(String(16), primary_key=True)
+    value: Mapped[str] = mapped_column(String(254), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("method_type IN ('WECHAT','QQ','EMAIL')", name="ck_contact_methods_type"),
+    )
+
+
 class MatchPreferenceRow(Base):
     __tablename__ = "match_preferences"
 
@@ -349,6 +375,54 @@ class InvitationRow(Base):
             "(status = 'PENDING' AND pending_key IS NOT NULL) OR "
             "(status <> 'PENDING' AND pending_key IS NULL)",
             name="ck_invitations_pending_key",
+        ),
+    )
+
+
+class ContactExchangeRequestRow(Base):
+    __tablename__ = "contact_exchange_requests"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    project_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    role_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    requester_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    recipient_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="PENDING")
+    pending_key: Mapped[str | None] = mapped_column(String(192), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["project_id", "role_id"],
+            ["project_roles.project_id", "project_roles.id"],
+            ondelete="RESTRICT",
+            name="fk_contact_exchange_requests_project_role",
+        ),
+        UniqueConstraint("pending_key", name="uq_contact_exchange_requests_pending_key"),
+        Index(
+            "ix_contact_exchange_requests_requester_created",
+            "requester_id",
+            "created_at",
+            "id",
+        ),
+        Index(
+            "ix_contact_exchange_requests_recipient_created",
+            "recipient_id",
+            "created_at",
+            "id",
+        ),
+        CheckConstraint(
+            "status IN ('PENDING','ACCEPTED','REJECTED','CANCELLED')",
+            name="ck_contact_exchange_requests_status",
+        ),
+        CheckConstraint(
+            "requester_id <> recipient_id", name="ck_contact_exchange_requests_not_self"
+        ),
+        CheckConstraint(
+            "(status = 'PENDING' AND pending_key IS NOT NULL) OR "
+            "(status <> 'PENDING' AND pending_key IS NULL)",
+            name="ck_contact_exchange_requests_pending_key",
         ),
     )
 

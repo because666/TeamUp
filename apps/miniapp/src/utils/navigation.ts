@@ -5,7 +5,9 @@ export const routes = {
   messages: "/pages/messages/index",
   me: "/pages/me/index",
   profileEdit: "/pages/profile/edit",
+  contactSettings: "/pages/contact/settings",
   projectList: "/pages/projects/list",
+  projectDetail: "/pages/projects/detail",
   projectEdit: "/pages/projects/edit",
   projectPreview: "/pages/projects/preview",
   projectResult: "/pages/projects/result",
@@ -15,6 +17,10 @@ export type MainRoute = "discover" | "matches" | "messages" | "me";
 
 export function openPage(url: string): void {
   uni.navigateTo({ url });
+}
+
+export function projectDetailRoute(projectId: string): string {
+  return `${routes.projectDetail}?id=${encodeURIComponent(projectId)}`;
 }
 
 export function replacePage(url: string): void {

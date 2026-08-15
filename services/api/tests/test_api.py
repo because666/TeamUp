@@ -156,7 +156,15 @@ def test_openapi_contract_has_all_public_routes_and_typed_success_responses() ->
         ("post", "/api/v1/blocks"),
         ("delete", "/api/v1/blocks/{blocked_user_id}"),
         ("post", "/api/v1/reports"),
+        ("get", "/api/v1/me/contact-card"),
+        ("put", "/api/v1/me/contact-card"),
+        ("post", "/api/v1/contact-exchange-requests"),
+        ("get", "/api/v1/me/contact-exchange-requests"),
+        ("post", "/api/v1/contact-exchange-requests/{exchange_request_id}/accept"),
+        ("post", "/api/v1/contact-exchange-requests/{exchange_request_id}/reject"),
+        ("post", "/api/v1/contact-exchange-requests/{exchange_request_id}/cancel"),
         ("post", "/api/v1/invitations"),
+        ("get", "/api/v1/me/invitations"),
         ("post", "/api/v1/invitations/{invitation_id}/accept"),
         ("post", "/api/v1/invitations/{invitation_id}/reject"),
         ("post", "/api/v1/conversations"),
@@ -776,6 +784,183 @@ def test_delete_block_cors_preflight() -> None:
     assert "DELETE" in response.headers["access-control-allow-methods"]
 
 
+def test_contact_card_and_exchange_flow_enforces_mutual_disclosure() -> None:
+    store = MemoryStore()
+    client = TestClient(make_app(Settings(environment="test", allow_local_login=True), store_override=store))
+    owner_token = login(client, "contact-owner")
+    requester_token = login(client, "contact-requester")
+    outsider_token = login(client, "contact-outsider")
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    requester_headers = {"Authorization": f"Bearer {requester_token}"}
+    outsider_headers = {"Authorization": f"Bearer {outsider_token}"}
+
+    assert client.get("/api/v1/me/contact-card", headers=requester_headers).json()["data"] is None
+    invalid_phone = client.put(
+        "/api/v1/me/contact-card",
+        headers=requester_headers,
+        json={"methods": [{"type": "PHONE", "value": "13800000000"}], "version": 0},
+    )
+    assert invalid_phone.status_code == 422
+    requester_card = client.put(
+        "/api/v1/me/contact-card",
+        headers=requester_headers,
+        json={
+            "methods": [
+                {"type": "WECHAT", "value": "member_01"},
+                {"type": "EMAIL", "value": "member@example.com"},
+            ],
+            "version": 0,
+        },
+    )
+    assert requester_card.status_code == 200
+    assert requester_card.json()["data"]["version"] == 1
+    version_conflict = client.put(
+        "/api/v1/me/contact-card",
+        headers=requester_headers,
+        json={"methods": [{"type": "WECHAT", "value": "member_02"}], "version": 0},
+    )
+    assert version_conflict.status_code == 409
+    assert version_conflict.json()["error"]["code"] == "VERSION_CONFLICT"
+
+    draft = client.post(
+        "/api/v1/projects", headers=owner_headers, json=project_payload()
+    ).json()["data"]
+    published = client.post(
+        f"/api/v1/projects/{draft['id']}/publish",
+        headers=owner_headers,
+        json={"version": draft["version"]},
+    ).json()["data"]
+    request_payload = {"projectId": published["id"], "roleId": published["roles"][0]["id"]}
+
+    assert client.post("/api/v1/contact-exchange-requests", json=request_payload).status_code == 401
+    forged = client.post(
+        "/api/v1/contact-exchange-requests",
+        headers=requester_headers,
+        json={**request_payload, "recipientUserId": "usr_forged"},
+    )
+    assert forged.status_code == 422
+    created = client.post(
+        "/api/v1/contact-exchange-requests",
+        headers=requester_headers,
+        json=request_payload,
+    )
+    assert created.status_code == 200
+    pending = created.json()["data"]
+    assert pending["status"] == "PENDING"
+    assert pending["box"] == "SENT"
+    assert pending["peerContactCard"] is None
+    assert "member_01" not in created.text
+    repeated = client.post(
+        "/api/v1/contact-exchange-requests",
+        headers=requester_headers,
+        json=request_payload,
+    )
+    assert repeated.json()["data"] == pending
+    assert len(store.contact_exchange_requests) == 1
+
+    accept_path = f"/api/v1/contact-exchange-requests/{pending['id']}/accept"
+    assert client.post(accept_path, headers=outsider_headers).status_code == 404
+    missing_card = client.post(accept_path, headers=owner_headers)
+    assert missing_card.status_code == 409
+    assert missing_card.json()["error"]["code"] == "CONTACT_CARD_REQUIRED"
+    owner_card = client.put(
+        "/api/v1/me/contact-card",
+        headers=owner_headers,
+        json={"methods": [{"type": "QQ", "value": "12345678"}], "version": 0},
+    )
+    assert owner_card.status_code == 200
+    accepted = client.post(accept_path, headers=owner_headers)
+    assert accepted.status_code == 200
+    accepted_data = accepted.json()["data"]
+    assert accepted_data["status"] == "ACCEPTED"
+    assert accepted_data["box"] == "RECEIVED"
+    assert accepted_data["peerContactCard"]["methods"][0]["value"] == "member_01"
+    assert client.post(accept_path, headers=owner_headers).json()["data"] == accepted_data
+
+    sent = client.get(
+        "/api/v1/me/contact-exchange-requests",
+        headers=requester_headers,
+        params={"box": "SENT"},
+    )
+    assert sent.status_code == 200
+    assert sent.json()["data"][0]["peerContactCard"]["methods"] == [
+        {"type": "QQ", "value": "12345678"}
+    ]
+    received = client.get(
+        "/api/v1/me/contact-exchange-requests",
+        headers=owner_headers,
+        params={"box": "RECEIVED"},
+    )
+    assert received.json()["data"][0]["id"] == pending["id"]
+    assert client.get(
+        "/api/v1/me/contact-exchange-requests",
+        headers=outsider_headers,
+        params={"box": "RECEIVED"},
+    ).json()["data"] == []
+    assert client.get(
+        "/api/v1/me/contact-exchange-requests",
+        headers=requester_headers,
+        params={"box": "INVALID"},
+    ).status_code == 422
+
+
+def test_contact_exchange_reject_cancel_and_block_boundaries() -> None:
+    store = MemoryStore()
+    client = TestClient(make_app(Settings(environment="test", allow_local_login=True), store_override=store))
+    owner_token = login(client, "contact-state-owner")
+    requester_token = login(client, "contact-state-requester")
+    owner_id = store.user_for_token(owner_token)
+    requester_id = store.user_for_token(requester_token)
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    requester_headers = {"Authorization": f"Bearer {requester_token}"}
+    for headers, method in (
+        (owner_headers, {"type": "QQ", "value": "87654321"}),
+        (requester_headers, {"type": "WECHAT", "value": "request_01"}),
+    ):
+        assert client.put(
+            "/api/v1/me/contact-card",
+            headers=headers,
+            json={"methods": [method], "version": 0},
+        ).status_code == 200
+    draft = client.post(
+        "/api/v1/projects", headers=owner_headers, json=project_payload()
+    ).json()["data"]
+    published = client.post(
+        f"/api/v1/projects/{draft['id']}/publish",
+        headers=owner_headers,
+        json={"version": draft["version"]},
+    ).json()["data"]
+    payload = {"projectId": published["id"], "roleId": published["roles"][0]["id"]}
+
+    first = client.post(
+        "/api/v1/contact-exchange-requests", headers=requester_headers, json=payload
+    ).json()["data"]
+    reject_path = f"/api/v1/contact-exchange-requests/{first['id']}/reject"
+    rejected = client.post(reject_path, headers=owner_headers)
+    assert rejected.json()["data"]["status"] == "REJECTED"
+    assert rejected.json()["data"]["peerContactCard"] is None
+    assert client.post(reject_path, headers=owner_headers).json()["data"] == rejected.json()["data"]
+    assert client.post(
+        f"/api/v1/contact-exchange-requests/{first['id']}/accept", headers=owner_headers
+    ).status_code == 409
+
+    second = client.post(
+        "/api/v1/contact-exchange-requests", headers=requester_headers, json=payload
+    ).json()["data"]
+    cancel_path = f"/api/v1/contact-exchange-requests/{second['id']}/cancel"
+    cancelled = client.post(cancel_path, headers=requester_headers)
+    assert cancelled.json()["data"]["status"] == "CANCELLED"
+    assert client.post(cancel_path, headers=requester_headers).json()["data"] == cancelled.json()["data"]
+    assert client.post(cancel_path, headers=owner_headers).status_code == 404
+
+    store.create_block(owner_id, requester_id)
+    blocked = client.post(
+        "/api/v1/contact-exchange-requests", headers=requester_headers, json=payload
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "USER_BLOCKED"
+
+
 def test_invitation_create_accept_permissions_and_idempotency() -> None:
     store = MemoryStore()
     client = TestClient(make_app(Settings(environment="test", allow_local_login=True), store_override=store))
@@ -812,6 +997,47 @@ def test_invitation_create_accept_permissions_and_idempotency() -> None:
     assert repeated.status_code == 200
     assert repeated.json()["data"] == invitation
 
+    received = client.get(
+        "/api/v1/me/invitations?box=RECEIVED", headers=invitee_headers
+    )
+    assert received.status_code == 200
+    assert received.json()["data"][0] == {
+        **invitation,
+        "projectTitle": published["title"],
+        "roleName": published["roles"][0]["name"],
+        "box": "RECEIVED",
+        "peerDisplayName": "TeamUp 用户",
+    }
+    sent = client.get("/api/v1/me/invitations?box=SENT", headers=owner_headers)
+    assert sent.status_code == 200
+    assert sent.json()["data"][0]["box"] == "SENT"
+    assert sent.json()["data"][0]["inviteeUserId"] == invitee_id
+    assert client.get(
+        "/api/v1/me/invitations?box=RECEIVED", headers=outsider_headers
+    ).json()["data"] == []
+    assert client.get("/api/v1/me/invitations?box=INVALID", headers=owner_headers).status_code == 422
+
+    second_invitation = client.post(
+        "/api/v1/invitations",
+        headers=owner_headers,
+        json={**payload, "inviteeUserId": store.user_for_token(outsider_token)},
+    )
+    assert second_invitation.status_code == 200
+    first_page = client.get(
+        "/api/v1/me/invitations?box=SENT&limit=1", headers=owner_headers
+    ).json()
+    assert first_page["meta"]["hasMore"] is True
+    assert first_page["meta"]["nextCursor"]
+    second_page = client.get(
+        f"/api/v1/me/invitations?box=SENT&limit=1&cursor={first_page['meta']['nextCursor']}",
+        headers=owner_headers,
+    ).json()
+    assert second_page["meta"]["hasMore"] is False
+    assert {first_page["data"][0]["id"], second_page["data"][0]["id"]} == {
+        invitation["id"],
+        second_invitation.json()["data"]["id"],
+    }
+
     accept_path = f"/api/v1/invitations/{invitation['id']}/accept"
     assert client.post(accept_path).status_code == 401
     assert client.post(accept_path, headers=outsider_headers).status_code == 404
@@ -825,6 +1051,7 @@ def test_invitation_create_accept_permissions_and_idempotency() -> None:
 
     schema = client.app.openapi()
     assert "post" in schema["paths"]["/api/v1/invitations"]
+    assert "get" in schema["paths"]["/api/v1/me/invitations"]
     assert "post" in schema["paths"]["/api/v1/invitations/{invitation_id}/accept"]
     assert "post" in schema["paths"]["/api/v1/invitations/{invitation_id}/reject"]
 
@@ -865,6 +1092,10 @@ def test_invitation_reject_expiry_block_and_capacity_boundaries() -> None:
     stored = store.invitations[expiring["id"]]
     store.invitations[expiring["id"]] = stored.model_copy(update={"expiresAt": stored.createdAt})
     second_headers = {"Authorization": f"Bearer {second_token}"}
+    expired_list = client.get(
+        "/api/v1/me/invitations?box=RECEIVED", headers=second_headers
+    ).json()["data"]
+    assert expired_list[0]["status"] == "EXPIRED"
     assert client.post(f"/api/v1/invitations/{expiring['id']}/accept", headers=second_headers).status_code == 409
     replacement = client.post("/api/v1/invitations", headers=owner_headers, json=second_payload)
     assert replacement.status_code == 200

@@ -335,6 +335,7 @@ function selectStage(event: { detail: { value: string | number } }): void {
 
 function addRole(): void {
   draft.roles.push({
+    id: "",
     name: "",
     skills: [],
     headcount: 1,
@@ -468,20 +469,23 @@ onLoad(loadProject);
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 24rpx;
+  gap: 20rpx;
 }
 
 .draft-version,
 .role-count {
   flex: 0 0 auto;
-  color: #74817b;
-  font-size: 21rpx;
+  padding: 7rpx 12rpx;
+  border-radius: 6rpx;
+  background: #edf4f0;
+  color: #426056;
+  font-size: 20rpx;
   font-weight: 700;
 }
 
 .field-grid {
   display: grid;
-  gap: 18rpx;
+  gap: 20rpx;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
@@ -491,12 +495,12 @@ onLoad(loadProject);
 
 .picker-control {
   display: flex;
-  height: 88rpx;
+  height: 92rpx;
   align-items: center;
   justify-content: space-between;
   gap: 16rpx;
   padding: 0 24rpx;
-  border: 1rpx solid #cfd9d3;
+  border: 1rpx solid #c7d3cd;
   border-radius: 8rpx;
   background: #ffffff;
   color: #17231e;
@@ -525,33 +529,33 @@ onLoad(loadProject);
 .role-section {
   display: flex;
   flex-direction: column;
-  gap: 24rpx;
+  gap: 22rpx;
 }
 
 .role-editor {
-  padding: 26rpx;
-  border: 1rpx solid #d7e0dc;
+  padding: 28rpx;
+  border: 1rpx solid #ccd9d2;
   border-radius: 8rpx;
   background: #ffffff;
 }
 
 .role-editor__header {
   display: flex;
-  min-height: 62rpx;
+  min-height: 68rpx;
   align-items: center;
   gap: 14rpx;
   padding-bottom: 20rpx;
-  border-bottom: 1rpx solid #e0e7e3;
+  border-bottom: 1rpx solid #dfe6e2;
 }
 
 .role-editor__number {
   display: flex;
-  width: 42rpx;
-  height: 42rpx;
-  flex: 0 0 42rpx;
+  width: 48rpx;
+  height: 48rpx;
+  flex: 0 0 48rpx;
   align-items: center;
   justify-content: center;
-  border-radius: 5rpx;
+  border-radius: 6rpx;
   background: #173d32;
   color: #ffffff;
   font-size: 21rpx;
@@ -560,15 +564,15 @@ onLoad(loadProject);
 
 .role-editor__title {
   color: #26352f;
-  font-size: 27rpx;
+  font-size: 26rpx;
   font-weight: 800;
 }
 
 .role-editor__remove {
   display: flex;
-  width: 68rpx;
-  height: 68rpx;
-  flex: 0 0 68rpx;
+  width: 72rpx;
+  height: 72rpx;
+  flex: 0 0 72rpx;
   align-items: center;
   justify-content: center;
   margin-left: auto;
@@ -584,8 +588,10 @@ onLoad(loadProject);
   justify-content: space-between;
   gap: 24rpx;
   margin-top: 28rpx;
-  padding-top: 22rpx;
-  border-top: 1rpx solid #e0e7e3;
+  padding: 22rpx;
+  border: 1rpx solid #dce8e1;
+  border-radius: 8rpx;
+  background: #f4f8f6;
 }
 
 .role-status__title,
@@ -615,8 +621,8 @@ onLoad(loadProject);
 }
 
 .task-actions {
-  padding: 32rpx 0 12rpx;
-  border-top: 1rpx solid #dce4df;
+  padding: 36rpx 0 12rpx;
+  border-top: 1rpx solid #dfe6e2;
 }
 
 .task-actions__buttons {

@@ -1,4 +1,5 @@
 from datetime import datetime
+import re
 from typing import Annotated, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
@@ -9,6 +10,10 @@ ProjectStatus = Literal["DRAFT", "PUBLISHED", "CLOSED"]
 RoleStatus = Literal["OPEN", "CLOSED"]
 MemberStatus = Literal["ACTIVE"]
 InvitationStatus = Literal["PENDING", "ACCEPTED", "REJECTED", "EXPIRED", "CANCELLED"]
+InvitationBox = Literal["SENT", "RECEIVED"]
+ContactMethodType = Literal["WECHAT", "QQ", "EMAIL"]
+ContactExchangeStatus = Literal["PENDING", "ACCEPTED", "REJECTED", "CANCELLED"]
+ContactExchangeBox = Literal["SENT", "RECEIVED"]
 StructuredLabel = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
 
 
@@ -140,6 +145,83 @@ class InvitationData(BaseModel):
     expiresAt: datetime
     createdAt: datetime
     respondedAt: datetime | None = None
+
+
+class InvitationSummaryData(InvitationData):
+    projectTitle: str
+    roleName: str
+    box: InvitationBox
+    peerDisplayName: str
+
+
+class ContactMethod(BaseModel):
+    type: ContactMethodType
+    value: str = Field(min_length=1, max_length=254)
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def strip_value(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def validate_for_type(self):
+        if self.type == "WECHAT" and not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{5,19}", self.value):
+            raise ValueError("WECHAT value must be 6..20 supported characters and start with a letter")
+        if self.type == "QQ" and not re.fullmatch(r"[1-9][0-9]{4,11}", self.value):
+            raise ValueError("QQ value must be 5..12 digits and cannot start with zero")
+        if self.type == "EMAIL" and not re.fullmatch(
+            r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+",
+            self.value,
+        ):
+            raise ValueError("EMAIL value must be a valid email address")
+        return self
+
+
+class ContactCardPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    methods: list[ContactMethod] = Field(min_length=1, max_length=3)
+
+    @field_validator("methods")
+    @classmethod
+    def validate_unique_types(cls, value: list[ContactMethod]) -> list[ContactMethod]:
+        method_types = [item.type for item in value]
+        if len(set(method_types)) != len(method_types):
+            raise ValueError("methods must not contain duplicate types")
+        return value
+
+
+class ContactCardUpdate(ContactCardPayload):
+    version: int = Field(default=0, ge=0)
+
+
+class ContactCardData(ContactCardPayload):
+    version: int = Field(ge=1)
+    updatedAt: datetime
+
+
+class ContactExchangeCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    projectId: str = Field(min_length=1, max_length=64)
+    roleId: str = Field(min_length=1, max_length=64)
+
+
+class ContactExchangeRequestRecord(BaseModel):
+    id: str
+    projectId: str
+    roleId: str
+    requesterUserId: str
+    recipientUserId: str
+    status: ContactExchangeStatus
+    createdAt: datetime
+    respondedAt: datetime | None = None
+
+
+class ContactExchangeRequestData(ContactExchangeRequestRecord):
+    projectTitle: str
+    roleName: str
+    box: ContactExchangeBox
+    peerDisplayName: str
+    peerContactCard: ContactCardData | None = None
 
 
 class LoginRequest(BaseModel):

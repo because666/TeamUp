@@ -3,7 +3,7 @@
 > Status: Confirmed<br>
 > Snapshot Branch: `main`<br>
 > Remote Baseline: `167edd5`<br>
-> Last Updated: 2026-08-14 by 角色 B（集成交接）
+> Last Updated: 2026-08-15 by 角色 A（界面精修任务）
 
 本文件只记录已合并或正在明确交接的聚合状态，不记录逐步开发日志。单个任务的实时进展见 `tasks/`。
 
@@ -34,6 +34,7 @@
 | TUP-20260810-backend-frontend-integration | 角色 B | 前后端契约、mock、联调与交付流程 | Proposed | `role-a/docs/TUP-20260810-role-a-product-backend` | [任务记录](tasks/TUP-20260810-backend-frontend-integration.md) |
 | TUP-20260811-fastapi-backend | 角色 B | FastAPI 框架决策、完整后端 PRD 与后端基线 | In Progress | `role-b/feature/TUP-20260811-fastapi-backend` | [任务记录](tasks/TUP-20260811-fastapi-backend.md) |
 | TUP-20260811-frontend-foundation | 角色 A | UniApp 微信小程序工程与 P0 页面骨架 | Ready for Review | `role-a/feature/TUP-20260811-frontend-foundation` | [任务记录](tasks/TUP-20260811-frontend-foundation.md) |
+| TUP-20260815-ui-refinement | 角色 A | 小程序 P0 界面精修、联系方式交换与邀请中心 | Ready for Review | `role-a/feature/TUP-20260815-ui-refinement` | [任务记录](tasks/TUP-20260815-ui-refinement.md) |
 | TUP-20260811-match-v0-1 | 角色 B | 可解释规则匹配引擎与 golden tests | Ready for Review | `role-b/feature/TUP-20260811-match-v0-1` | [任务记录](tasks/TUP-20260811-match-v0-1.md) |
 | TUP-20260811-match-api-data-contract | 角色 B | 匹配 API、分页与数据扩展契约 | Ready for Review | `role-b/docs/TUP-20260811-match-api-data-contract` | [任务记录](tasks/TUP-20260811-match-api-data-contract.md) |
 | TUP-20260812-match-preferences | 角色 B | 匹配偏好与岗位匹配字段 | Ready for Review | `role-b/feature/TUP-20260812-match-preferences` | [任务记录](tasks/TUP-20260812-match-preferences.md) |

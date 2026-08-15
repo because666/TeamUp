@@ -1,5 +1,9 @@
 <template>
-  <view class="project-card surface">
+  <button
+    class="project-card surface"
+    :aria-label="`查看项目：${project.title}`"
+    @click="emit('select', project.id)"
+  >
     <view class="project-card__accent" :class="`project-card__accent--${project.accent}`" />
     <view class="project-card__body">
       <view class="project-card__meta-row">
@@ -15,23 +19,37 @@
       </view>
       <view class="project-card__footer">
         <text>{{ project.openRoleCount }} 个开放岗位</text>
-        <text>{{ project.timeLabel }}</text>
+        <view class="project-card__footer-action">
+          <text>{{ project.timeLabel }}</text>
+          <uni-icons type="right" size="16" color="#607069" />
+        </view>
       </view>
     </view>
-  </view>
+  </button>
 </template>
 
 <script setup lang="ts">
 import type { DiscoveryProject } from "@/domain/models";
 
 defineProps<{ project: DiscoveryProject }>();
+const emit = defineEmits<{ (event: "select", projectId: string): void }>();
 </script>
 
 <style scoped>
 .project-card {
   position: relative;
   display: flex;
+  width: 100%;
   overflow: hidden;
+  padding: 0;
+  color: inherit;
+  line-height: normal;
+  text-align: left;
+}
+
+.project-card:active {
+  background: #f1f7f4;
+  transform: translateY(1rpx);
 }
 
 .project-card__accent {
@@ -114,5 +132,13 @@ defineProps<{ project: DiscoveryProject }>();
   border-top: 1rpx solid #e0e7e3;
   color: #74817b;
   font-size: 21rpx;
+}
+
+.project-card__footer-action {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6rpx;
 }
 </style>

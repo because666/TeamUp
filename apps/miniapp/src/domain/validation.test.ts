@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { emptyProfileDraft, emptyProjectDraft } from "./models";
-import { isValid, validateProfile, validateProject } from "./validation";
+import { isValid, validateContactCard, validateProfile, validateProject } from "./validation";
 
 describe("profile validation", () => {
   it("reports every P0 required group on an empty profile", () => {
@@ -54,5 +54,26 @@ describe("project validation", () => {
     });
 
     expect(isValid(validateProject(project))).toBe(true);
+  });
+});
+
+describe("contact card validation", () => {
+  it("requires at least one supported valid method", () => {
+    expect(validateContactCard({ methods: [], version: 0 })["CT-METHODS"]).toBeTruthy();
+    expect(validateContactCard({
+      methods: [{ type: "WECHAT", value: "short" }],
+      version: 0,
+    })["CT-WECHAT"]).toBeTruthy();
+  });
+
+  it("accepts WeChat, QQ and email without collecting phone numbers", () => {
+    expect(isValid(validateContactCard({
+      methods: [
+        { type: "WECHAT", value: "teamup_user" },
+        { type: "QQ", value: "12345678" },
+        { type: "EMAIL", value: "user@example.com" },
+      ],
+      version: 0,
+    }))).toBe(true);
   });
 });

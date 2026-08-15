@@ -3,11 +3,11 @@
 > Status: Proposed<br>
 > Owner: 角色 B<br>
 > Reviewers: 角色 A<br>
-> Last Updated: 2026-08-12
+> Last Updated: 2026-08-15
 
 ## 基础实现状态
 
-首个 FastAPI 切片保留 local/test 内存适配器，并按 [ADR-0004](../decisions/ADR-0004-mysql-data-access.md) 实现了 MySQL 8 持久化适配器。匹配偏好、项目成员、用户拉黑、岗位邀请及会话消息分别通过第二至第六版堆叠迁移实现。合入 `main` 仍需角色 A 评审。
+首个 FastAPI 切片保留 local/test 内存适配器，并按 [ADR-0004](../decisions/ADR-0004-mysql-data-access.md) 实现了 MySQL 8 持久化适配器。匹配偏好、项目成员、用户拉黑、岗位邀请及历史会话消息分别通过第二至第六版堆叠迁移实现；第十一版迁移增加联系名片和联系方式交换请求。合入 `main` 仍需跨角色评审。
 
 首批已实现物理表：
 
@@ -16,6 +16,8 @@
 | `users` | 内部用户与微信 subject | subject 唯一、状态检查 |
 | `sessions` | 平台会话 | 只存 SHA-256 token 摘要、过期与撤销时间、用户外键 |
 | `profiles` | 当前能力名片 | 用户主键/外键、版本与枚举检查 |
+| `contact_cards` | 当前用户私有联系名片 | 用户主键/外键、版本检查、更新时间 |
+| `contact_methods` | 微信号、QQ 或邮箱 | `(user_id, type)` 主键、受控类型和值长度；不允许手机号 |
 | `profile_skills` | 有序名片技能 | `(user_id, position)` 主键 |
 | `profile_collaboration_scenarios` | 有序协作场景 | `(user_id, position)` 主键 |
 | `projects` | 项目主体 | owner 外键、状态/版本检查、列表索引 |
@@ -29,6 +31,7 @@
 | `project_members` | 项目有效成员 | 项目/用户唯一、项目/岗位复合外键、状态检查和容量索引 |
 | `blocks` | 用户单向拉黑关系 | `(blocker_id, blocked_id)` 主键、禁止自己拉黑和反向查询索引 |
 | `invitations` | 项目岗位邀请与状态机 | 项目/岗位复合外键、待处理唯一键、用户外键、状态/自邀检查和查询索引 |
+| `contact_exchange_requests` | 围绕项目岗位的双方联系交换状态机 | 项目/岗位复合外键、requester/recipient 外键、待处理唯一键、状态与参与者检查、双向列表索引 |
 | `conversations` | 双人项目会话 | 项目外键、项目/参与者排序组合唯一键、最近消息时间索引 |
 | `conversation_participants` | 会话有效参与者 | `(conversation_id, user_id)` 主键、用户/状态查询索引 |
 | `messages` | 纯文本站内消息 | 发送者/参与者复合外键、sender/client ID 唯一、稳定分页索引和状态检查 |
@@ -96,6 +99,8 @@
 | User | id, wechat_subject, status, consent_version, created_at | `wechat_subject` 唯一且不可公开 |
 | AccountDeletionRequest（任务分支已实现） | id, user_id, status, pending_user_id, requested_at, resolved_at | `pending_user_id` 保证每个用户最多一条 `PENDING` 申请；申请时账号原子进入 `DELETION_PENDING` 并撤销会话 |
 | Profile | user_id, nickname, school, major, grade, bio, visibility, version | 一个用户一个当前名片 |
+| ContactCard（任务分支实现） | user_id, version, updated_at | 一个用户一份私有联系名片；仅本人或已接受交换的对方可读 |
+| ContactMethod（任务分支实现） | user_id, type, value | `(user_id,type)` 唯一；type 仅 `WECHAT/QQ/EMAIL`；值为 Sensitive |
 | Skill | id, normalized_name, category, status | 规范名唯一，自定义标签需治理 |
 | ProfileSkill | profile_id, skill_id, level, source | 组合唯一 |
 | Experience | id, user_id, type, title, description, verification_status | AI 不得把状态改为 verified |
@@ -112,6 +117,7 @@
 | ConversationParticipant | conversation_id, user_id, status | 组合唯一 |
 | Message | id, conversation_id, sender_id, type, content, status, created_at | 发送者必须是会话参与者 |
 | Invitation | id, project_id, role_id, inviter_id, invitee_id, status, expires_at | 接受操作幂等 |
+| ContactExchangeRequest（任务分支实现） | id, project_id, role_id, requester_id, recipient_id, status, pending_key, created_at, responded_at | recipient 由项目 owner 派生；仅参与者可见；披露权限由 `ACCEPTED` 状态决定 |
 | Block | blocker_id, blocked_id, created_at | 组合唯一，不允许自己拉黑自己 |
 | Report（任务分支已实现提交记录） | id, reporter_id, target_type, target_id, reason, description, status, pending_key, created_at | 目标类型/原因/状态受约束；`pending_key` 保证同一 reporter、目标、原因最多一条 `PENDING`；正文仅供治理，不进入推荐或日志 |
 | AuditEvent（任务分支已实现最小写入） | id, actor_user_id, action, resource_type, resource_id, request_id, outcome, created_at | 举报首次提交和注销首次申请同事务写入；不存密钥、举报说明和完整敏感正文 |
@@ -120,6 +126,8 @@
 
 ```text
 User 1--1 Profile
+User 1--1 ContactCard
+ContactCard 1--N ContactMethod
 User 1--N Experience
 Profile N--N Skill
 User 1--N Project (owner)
@@ -129,6 +137,8 @@ Project N--N User (through ProjectMember)
 User N--N Conversation
 Conversation 1--N Message
 ProjectRole 1--N Invitation
+ProjectRole 1--N ContactExchangeRequest
+User 1--N ContactExchangeRequest (requester/recipient)
 User N--N User (through Block)
 User 1--N Report
 MatchSnapshot 1--N RecommendationImpression
@@ -153,7 +163,20 @@ RecommendationImpression 1--N RecommendationOutcome
 
 第五版实现使用 `pending_key = project_id:role_id:invitee_id` 保证同一组合最多一条 `PENDING` 邀请；进入终态时清空该键，允许后续重新邀请。`expires_at`、`created_at` 和 `responded_at` 使用 UTC；首版有效期为 7 天，该时长仍需角色 A 评审。过期邀请在读取/处理时判定，当前不依赖定时任务。
 
-### Conversation / Message
+### ContactExchangeRequest
+
+`PENDING -> ACCEPTED | REJECTED | CANCELLED`
+
+- `pending_key = requester_id:project_id:role_id` 保证同一申请人、项目、岗位最多一条 `PENDING` 记录；进入终态后清空；
+- requester 只能创建和取消，recipient 只能接受或拒绝；recipient 始终由项目 owner 派生，不能由客户端指定；
+- 创建时检查项目已发布、岗位开放/有容量、申请人不是 owner/现有成员、申请人已有联系名片且双方未拉黑；
+- 接受时在同一事务重新检查双方联系名片和拉黑关系；重复接受、拒绝或取消同一确定终态返回原记录，冲突终态返回 `CONTACT_REQUEST_NOT_ACTIONABLE`；
+- 只有 `ACCEPTED` 为请求双方授予读取对方当前联系名片的权限；拒绝、取消和待处理不产生披露权限；
+- 联系方式值不复制进请求表，不进入日志、审计事件、推荐特征或训练数据。
+
+### Conversation / Message（Deprecated for P0）
+
+第六版历史实现保留以下兼容与安全约束，但 `MSG-001` 已由 `CONTACT-001` 替代，P0 不提供会话页面或文本聊天：
 
 - 第六版 `conversation_key = project_id:sorted_user_a:sorted_user_b`，保证同一项目与同一对用户只有一个会话；
 - 每个首版会话恰有两个 `ACTIVE` 参与者；数据库通过 `(conversation_id, sender_id)` 复合外键保证消息发送者属于该会话；
@@ -173,7 +196,7 @@ RecommendationImpression 1--N RecommendationOutcome
 | --- | --- | --- |
 | Public | 用户主动公开的昵称、技能、项目摘要 | 仍需可撤回公开，禁止无限复制 |
 | Internal | 用户 ID、匹配分项、举报状态 | 仅业务所需角色和服务访问 |
-| Sensitive | 微信身份标识、联系方式、私信正文、未公开经历 | 加密传输、严格授权、最小日志 |
+| Sensitive | 微信身份标识、联系方式、私信正文、未公开经历 | 加密传输；生产数据库与备份加密；严格授权；不进入日志、推荐特征或训练数据 |
 | Secret | 会话签名密钥、微信密钥、数据库凭证、AI API Key | 仅密钥管理/运行环境，永不进入业务表和仓库 |
 
 ## 6. 索引与查询
@@ -183,6 +206,7 @@ RecommendationImpression 1--N RecommendationOutcome
 - 用户微信身份唯一索引；
 - 项目状态、发布时间和方向组合查询；
 - 岗位状态与项目外键；
+- 联系方式交换请求的 requester/recipient、状态和创建时间；
 - 技能关联的双向索引；
 - 会话参与者和消息时间分页；
 - 邀请的被邀请者、状态和过期时间；

@@ -20,7 +20,7 @@
     },
     {
       "path": "pages/messages/index",
-      "style": { "navigationBarTitleText": "消息", "navigationStyle": "custom" }
+      "style": { "navigationBarTitleText": "联系", "navigationStyle": "custom" }
     },
     {
       "path": "pages/me/index",
@@ -31,8 +31,16 @@
       "style": { "navigationBarTitleText": "能力名片", "navigationStyle": "custom" }
     },
     {
+      "path": "pages/contact/settings",
+      "style": { "navigationBarTitleText": "联系方式", "navigationStyle": "custom" }
+    },
+    {
       "path": "pages/projects/list",
       "style": { "navigationBarTitleText": "我的项目", "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/projects/detail",
+      "style": { "navigationBarTitleText": "项目详情", "navigationStyle": "custom" }
     },
     {
       "path": "pages/projects/edit",

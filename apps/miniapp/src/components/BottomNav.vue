@@ -33,7 +33,7 @@ const items: Array<{
 }> = [
   { key: "discover", label: "发现", icon: "search", activeIcon: "search" },
   { key: "matches", label: "匹配", icon: "flag", activeIcon: "flag-filled" },
-  { key: "messages", label: "消息", icon: "chat", activeIcon: "chat-filled" },
+  { key: "messages", label: "联系", icon: "personadd", activeIcon: "personadd" },
   { key: "me", label: "我的", icon: "person", activeIcon: "person-filled" },
 ];
 

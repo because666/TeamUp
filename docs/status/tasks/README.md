@@ -2,7 +2,7 @@
 
 > Status: Confirmed<br>
 > Owner: 角色 A / 角色 B<br>
-> Last Updated: 2026-08-14
+> Last Updated: 2026-08-15
 
 每个会改变产品行为、API、数据、依赖、部署或团队规范的任务都使用独立 Markdown 文件。文件名使用 `<TASK-ID>.md`，从 [任务模板](../templates/TASK_TEMPLATE.md) 创建。
 
@@ -47,6 +47,7 @@
 - [TUP-20260814-frontend-api-adapter](TUP-20260814-frontend-api-adapter.md)
 - [TUP-20260814-project-put-compat](TUP-20260814-project-put-compat.md)
 - [TUP-20260814-p0-integration](TUP-20260814-p0-integration.md)
+- [TUP-20260815-ui-refinement](TUP-20260815-ui-refinement.md)
 
 跨角色评审：
 
@@ -80,3 +81,4 @@
 - [TUP-20260814-frontend-api-adapter-review](../reviews/TUP-20260814-frontend-api-adapter-review.md)
 - [TUP-20260814-project-put-compat-review](../reviews/TUP-20260814-project-put-compat-review.md)
 - [TUP-20260814-p0-integration-review](../reviews/TUP-20260814-p0-integration-review.md)
+- [TUP-20260815-ui-refinement-review](../reviews/TUP-20260815-ui-refinement-review.md)

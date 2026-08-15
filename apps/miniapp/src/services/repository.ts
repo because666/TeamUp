@@ -1,14 +1,34 @@
-import { cloneProfile, cloneProject, fixtureEnvelope } from "@/domain/fixtures";
+import {
+  cloneContactRequests,
+  cloneProfile,
+  cloneProject,
+  cloneProjectInvitations,
+  discoveryProjectDetails,
+  fixtureEnvelope,
+  initialFixtureContactRequests,
+  initialFixtureProjectInvitations,
+} from "@/domain/fixtures";
 import {
   emptyProfileDraft,
   emptyProjectDraft,
+  type ContactCard,
+  type ContactExchangeBox,
+  type ContactExchangeRequest,
   type DemoSession,
   type FixtureEnvelope,
   type ProfileDraft,
   type ProjectDraft,
+  type ProjectInvitation,
+  type ProjectInvitationBox,
+  type ProjectInvitationRecord,
   type ServiceEnvelope,
 } from "@/domain/models";
-import { isValid, validateProfile, validateProject } from "@/domain/validation";
+import {
+  isValid,
+  validateContactCard,
+  validateProfile,
+  validateProject,
+} from "@/domain/validation";
 import { apiBaseUrl, AppServiceError, isFixtureMode } from "./runtime";
 import { apiSessionStorage, fixtureStorage } from "./storage";
 
@@ -29,6 +49,7 @@ interface ApiSessionData {
 }
 
 interface ApiRoleData {
+  id: string;
   name: string;
   skills: string[];
   headcount: number;
@@ -39,6 +60,7 @@ interface ApiRoleData {
 
 interface ApiProjectData {
   id: string;
+  ownerId: string;
   title: string;
   description: string;
   direction: string;
@@ -129,6 +151,7 @@ function getWechatCode(): Promise<string> {
 function mapProject(data: ApiProjectData): ProjectDraft {
   return {
     id: data.id,
+    ownerId: data.ownerId,
     title: data.title,
     description: data.description,
     direction: data.direction,
@@ -139,6 +162,7 @@ function mapProject(data: ApiProjectData): ProjectDraft {
     version: data.version,
     publishedAt: data.publishedAt || null,
     roles: (data.roles || []).map((role) => ({
+      id: role.id,
       name: role.name,
       skills: [...(role.skills || [])],
       headcount: role.headcount,
@@ -215,6 +239,85 @@ async function apiGetProject(): Promise<ServiceEnvelope<ProjectDraft>> {
   };
 }
 
+async function apiGetProjectById(projectId: string): Promise<ServiceEnvelope<ProjectDraft>> {
+  const response = await request<ApiProjectData>(`/projects/${encodeURIComponent(projectId)}`, "GET");
+  return { data: mapProject(response.data), meta: response.meta, requestId: response.requestId };
+}
+
+async function apiGetContactCard(): Promise<ServiceEnvelope<ContactCard | null>> {
+  const response = await request<ContactCard | null>("/me/contact-card", "GET");
+  return { data: response.data, meta: response.meta, requestId: response.requestId };
+}
+
+async function apiSaveContactCard(card: ContactCard): Promise<ServiceEnvelope<ContactCard>> {
+  const response = await request<ContactCard>("/me/contact-card", "PUT", {
+    methods: card.methods,
+    version: card.version,
+  });
+  return { data: response.data, meta: response.meta, requestId: response.requestId };
+}
+
+async function apiCreateContactExchangeRequest(
+  projectId: string,
+  roleId: string,
+): Promise<ServiceEnvelope<ContactExchangeRequest>> {
+  const response = await request<ContactExchangeRequest>("/contact-exchange-requests", "POST", {
+    projectId,
+    roleId,
+  });
+  return { data: response.data, meta: response.meta, requestId: response.requestId };
+}
+
+async function apiListContactExchangeRequests(
+  box: ContactExchangeBox,
+): Promise<ServiceEnvelope<ContactExchangeRequest[]>> {
+  const response = await request<ContactExchangeRequest[]>(
+    `/me/contact-exchange-requests?box=${box}`,
+    "GET",
+  );
+  return { data: response.data, meta: response.meta, requestId: response.requestId };
+}
+
+async function apiActOnContactExchangeRequest(
+  requestId: string,
+  action: "accept" | "reject" | "cancel",
+): Promise<ServiceEnvelope<ContactExchangeRequest>> {
+  const response = await request<ContactExchangeRequest>(
+    `/contact-exchange-requests/${encodeURIComponent(requestId)}/${action}`,
+    "POST",
+  );
+  return { data: response.data, meta: response.meta, requestId: response.requestId };
+}
+
+async function apiListProjectInvitations(
+  box: ProjectInvitationBox,
+): Promise<ServiceEnvelope<ProjectInvitation[]>> {
+  const response = await request<ProjectInvitation[]>(`/me/invitations?box=${box}`, "GET");
+  return { data: response.data, meta: response.meta, requestId: response.requestId };
+}
+
+async function apiActOnProjectInvitation(
+  invitationId: string,
+  action: "accept" | "reject",
+): Promise<ServiceEnvelope<ProjectInvitationRecord>> {
+  if (action === "accept") {
+    const response = await request<{ invitation: ProjectInvitationRecord }>(
+      `/invitations/${encodeURIComponent(invitationId)}/accept`,
+      "POST",
+    );
+    return {
+      data: response.data.invitation,
+      meta: response.meta,
+      requestId: response.requestId,
+    };
+  }
+  const response = await request<ProjectInvitationRecord>(
+    `/invitations/${encodeURIComponent(invitationId)}/reject`,
+    "POST",
+  );
+  return { data: response.data, meta: response.meta, requestId: response.requestId };
+}
+
 async function apiSaveProject(project: ProjectDraft): Promise<ServiceEnvelope<ProjectDraft>> {
   const payload = serializeProject(project);
   const response = project.id
@@ -286,6 +389,189 @@ export const repository = {
     await wait();
     const project = fixtureStorage.readProject() || emptyProjectDraft();
     return fixtureEnvelope(cloneProject(project), ["GAP-PROJ-01", "GAP-PROJ-03", "GAP-PROJ-04"]);
+  },
+
+  async getProjectById(projectId: string): Promise<ServiceEnvelope<ProjectDraft> | FixtureEnvelope<ProjectDraft>> {
+    if (!isFixtureMode()) return apiGetProjectById(projectId);
+    await wait();
+    const project = discoveryProjectDetails.find((item) => item.id === projectId);
+    if (!project) {
+      throw new AppServiceError("RESOURCE_NOT_FOUND", "项目不存在或暂不可见。", 404);
+    }
+    return fixtureEnvelope(cloneProject(project), ["GAP-PROJ-04"]);
+  },
+
+  async getContactCard(): Promise<ServiceEnvelope<ContactCard | null> | FixtureEnvelope<ContactCard | null>> {
+    if (!isFixtureMode()) return apiGetContactCard();
+    await wait(300);
+    const card = fixtureStorage.readContactCard();
+    return fixtureEnvelope(card ? JSON.parse(JSON.stringify(card)) as ContactCard : null, ["GAP-CONTACT-01"]);
+  },
+
+  async saveContactCard(card: ContactCard): Promise<ServiceEnvelope<ContactCard> | FixtureEnvelope<ContactCard>> {
+    if (!isValid(validateContactCard(card))) {
+      throw new AppServiceError("VALIDATION_ERROR", "请检查填写的联系方式。", 422);
+    }
+    if (!isFixtureMode()) return apiSaveContactCard(card);
+    await wait(420);
+    const current = fixtureStorage.readContactCard();
+    if (current && current.version !== card.version) {
+      throw new AppServiceError("VERSION_CONFLICT", "联系名片已被更新，请重新加载。", 409);
+    }
+    if (!current && card.version !== 0) {
+      throw new AppServiceError("VERSION_CONFLICT", "联系名片已被更新，请重新加载。", 409);
+    }
+    const saved: ContactCard = {
+      methods: card.methods.map((method) => ({ ...method, value: method.value.trim() })),
+      version: current ? current.version + 1 : 1,
+      updatedAt: new Date().toISOString(),
+    };
+    fixtureStorage.writeContactCard(saved);
+    return fixtureEnvelope(JSON.parse(JSON.stringify(saved)) as ContactCard, ["GAP-CONTACT-01"]);
+  },
+
+  async createContactExchangeRequest(
+    projectId: string,
+    roleId: string,
+  ): Promise<ServiceEnvelope<ContactExchangeRequest> | FixtureEnvelope<ContactExchangeRequest>> {
+    if (!projectId || !roleId) {
+      throw new AppServiceError("VALIDATION_ERROR", "项目或岗位信息不完整。", 422);
+    }
+    if (!isFixtureMode()) return apiCreateContactExchangeRequest(projectId, roleId);
+    await wait(420);
+    if (!fixtureStorage.readContactCard()) {
+      throw new AppServiceError("CONTACT_CARD_REQUIRED", "请先填写自己的联系方式。", 409);
+    }
+    const project = discoveryProjectDetails.find((item) => item.id === projectId);
+    const role = project?.roles.find((item) => item.id === roleId);
+    if (!project || project.status !== "PUBLISHED" || !role || role.status !== "OPEN") {
+      throw new AppServiceError("RESOURCE_NOT_FOUND", "项目或岗位不存在或不可联系。", 404);
+    }
+    const requests = fixtureStorage.readContactRequests()
+      || cloneContactRequests(initialFixtureContactRequests);
+    const existing = requests.find((item) => (
+      item.box === "SENT"
+      && item.projectId === projectId
+      && item.roleId === roleId
+      && (item.status === "PENDING" || item.status === "ACCEPTED")
+    ));
+    if (existing) return fixtureEnvelope({ ...existing }, ["GAP-CONTACT-01"]);
+    const created: ContactExchangeRequest = {
+      id: `fixture_contact_request_${Date.now()}`,
+      projectId,
+      roleId,
+      projectTitle: project.title,
+      roleName: role.name,
+      requesterUserId: "fixture_user_current_01",
+      recipientUserId: project.ownerId || "fixture_user_owner",
+      box: "SENT",
+      peerDisplayName: "项目联系人",
+      status: "PENDING",
+      peerContactCard: null,
+      createdAt: new Date().toISOString(),
+      respondedAt: null,
+    };
+    requests.unshift(created);
+    fixtureStorage.writeContactRequests(requests);
+    return fixtureEnvelope({ ...created }, ["GAP-CONTACT-01"]);
+  },
+
+  async listContactExchangeRequests(
+    box: ContactExchangeBox,
+  ): Promise<ServiceEnvelope<ContactExchangeRequest[]> | FixtureEnvelope<ContactExchangeRequest[]>> {
+    if (!isFixtureMode()) return apiListContactExchangeRequests(box);
+    await wait(360);
+    const requests = fixtureStorage.readContactRequests()
+      || cloneContactRequests(initialFixtureContactRequests);
+    fixtureStorage.writeContactRequests(requests);
+    return fixtureEnvelope(
+      cloneContactRequests(requests.filter((item) => item.box === box)),
+      ["GAP-CONTACT-01"],
+    );
+  },
+
+  async actOnContactExchangeRequest(
+    requestId: string,
+    action: "accept" | "reject" | "cancel",
+  ): Promise<ServiceEnvelope<ContactExchangeRequest> | FixtureEnvelope<ContactExchangeRequest>> {
+    if (!requestId) throw new AppServiceError("VALIDATION_ERROR", "联系申请信息不完整。", 422);
+    if (!isFixtureMode()) return apiActOnContactExchangeRequest(requestId, action);
+    await wait(360);
+    const requests = fixtureStorage.readContactRequests()
+      || cloneContactRequests(initialFixtureContactRequests);
+    const index = requests.findIndex((item) => item.id === requestId);
+    if (index < 0) throw new AppServiceError("RESOURCE_NOT_FOUND", "联系申请不存在或不可见。", 404);
+    const current = requests[index];
+    const expectedBox = action === "cancel" ? "SENT" : "RECEIVED";
+    if (current.box !== expectedBox) {
+      throw new AppServiceError("RESOURCE_NOT_FOUND", "联系申请不存在或不可见。", 404);
+    }
+    const terminal = action === "accept" ? "ACCEPTED" : action === "reject" ? "REJECTED" : "CANCELLED";
+    if (current.status === terminal) return fixtureEnvelope({ ...current }, ["GAP-CONTACT-01"]);
+    if (current.status !== "PENDING") {
+      throw new AppServiceError("CONTACT_REQUEST_NOT_ACTIONABLE", "联系申请已处理。", 409);
+    }
+    if (action === "accept" && !fixtureStorage.readContactCard()) {
+      throw new AppServiceError("CONTACT_CARD_REQUIRED", "请先填写自己的联系方式。", 409);
+    }
+    const updated: ContactExchangeRequest = {
+      ...current,
+      status: terminal,
+      respondedAt: new Date().toISOString(),
+      peerContactCard: action === "accept"
+        ? {
+          methods: [{ type: "WECHAT", value: "fixture_candidate_01" }],
+          version: 1,
+          updatedAt: new Date().toISOString(),
+        }
+        : null,
+    };
+    requests[index] = updated;
+    fixtureStorage.writeContactRequests(requests);
+    return fixtureEnvelope({ ...updated }, ["GAP-CONTACT-01"]);
+  },
+
+  async listProjectInvitations(
+    box: ProjectInvitationBox,
+  ): Promise<ServiceEnvelope<ProjectInvitation[]> | FixtureEnvelope<ProjectInvitation[]>> {
+    if (!isFixtureMode()) return apiListProjectInvitations(box);
+    await wait(360);
+    const invitations = fixtureStorage.readProjectInvitations()
+      || cloneProjectInvitations(initialFixtureProjectInvitations);
+    fixtureStorage.writeProjectInvitations(invitations);
+    return fixtureEnvelope(
+      cloneProjectInvitations(invitations.filter((item) => item.box === box)),
+      ["GAP-CONTACT-01"],
+    );
+  },
+
+  async actOnProjectInvitation(
+    invitationId: string,
+    action: "accept" | "reject",
+  ): Promise<ServiceEnvelope<ProjectInvitationRecord> | FixtureEnvelope<ProjectInvitationRecord>> {
+    if (!invitationId) throw new AppServiceError("VALIDATION_ERROR", "邀请信息不完整。", 422);
+    if (!isFixtureMode()) return apiActOnProjectInvitation(invitationId, action);
+    await wait(360);
+    const invitations = fixtureStorage.readProjectInvitations()
+      || cloneProjectInvitations(initialFixtureProjectInvitations);
+    const index = invitations.findIndex((item) => item.id === invitationId);
+    if (index < 0 || invitations[index].box !== "RECEIVED") {
+      throw new AppServiceError("RESOURCE_NOT_FOUND", "邀请不存在或不可见。", 404);
+    }
+    const current = invitations[index];
+    const terminal = action === "accept" ? "ACCEPTED" : "REJECTED";
+    if (current.status === terminal) return fixtureEnvelope({ ...current }, ["GAP-CONTACT-01"]);
+    if (current.status !== "PENDING") {
+      throw new AppServiceError("INVITATION_NOT_ACTIONABLE", "邀请已处理或已过期。", 409);
+    }
+    const updated: ProjectInvitation = {
+      ...current,
+      status: terminal,
+      respondedAt: new Date().toISOString(),
+    };
+    invitations[index] = updated;
+    fixtureStorage.writeProjectInvitations(invitations);
+    return fixtureEnvelope({ ...updated }, ["GAP-CONTACT-01"]);
   },
 
   async saveProject(project: ProjectDraft): Promise<ServiceEnvelope<ProjectDraft> | FixtureEnvelope<ProjectDraft>> {

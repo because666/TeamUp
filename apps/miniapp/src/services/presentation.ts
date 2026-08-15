@@ -41,6 +41,30 @@ export function presentError(error: unknown): ErrorPresentation {
     };
   }
   if (error.status === 409) {
+    if (error.code === "USER_BLOCKED") {
+      return {
+        kind: "forbidden",
+        title: "当前无法联系项目组织者",
+        description: "当前用户关系不允许交换联系方式。",
+        requestId: error.requestId,
+      };
+    }
+    if (error.code === "CONTACT_CARD_REQUIRED") {
+      return {
+        kind: "conflict",
+        title: "请先填写联系方式",
+        description: "填写微信号、QQ 或邮箱后，才能申请或同意交换。",
+        requestId: error.requestId,
+      };
+    }
+    if (error.code === "CONTACT_REQUEST_NOT_ACTIONABLE") {
+      return {
+        kind: "conflict",
+        title: "这条申请已经不能处理",
+        description: "请刷新联系列表查看最新状态。",
+        requestId: error.requestId,
+      };
+    }
     return {
       kind: "conflict",
       title: "内容已在其他位置更新",

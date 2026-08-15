@@ -19,6 +19,10 @@ from .schemas import (
     AccountDeletionRequestData,
     BlockData,
     BlockRequest,
+    ContactCardData,
+    ContactCardUpdate,
+    ContactExchangeCreateRequest,
+    ContactExchangeRequestData,
     ConversationCreateRequest,
     ConversationData,
     Envelope,
@@ -26,6 +30,7 @@ from .schemas import (
     InvitationAcceptData,
     InvitationCreateRequest,
     InvitationData,
+    InvitationSummaryData,
     LoginRequest,
     LogoutData,
     MatchPreferencesData,
@@ -102,6 +107,7 @@ def make_app(
             {"name": "system"},
             {"name": "auth"},
             {"name": "profile"},
+            {"name": "contacts"},
             {"name": "matching"},
             {"name": "projects"},
             {"name": "team"},
@@ -235,6 +241,110 @@ def make_app(
         removed = app_store.remove_block(user_id, blocked_user_id)
         return envelope(request, {"blockedUserId": blocked_user_id, "removed": removed})
 
+    @api.get(
+        "/me/contact-card",
+        tags=["contacts"],
+        response_model=Envelope[ContactCardData | None],
+    )
+    def get_contact_card(request: Request, user_id: str = Depends(current_user)):
+        card = app_store.get_contact_card(user_id)
+        return envelope(request, card.model_dump(mode="json") if card else None)
+
+    @api.put(
+        "/me/contact-card",
+        tags=["contacts"],
+        response_model=Envelope[ContactCardData],
+    )
+    def save_contact_card(
+        payload: ContactCardUpdate,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ):
+        card = app_store.save_contact_card(user_id, payload, payload.version)
+        return envelope(request, card.model_dump(mode="json"))
+
+    @api.post(
+        "/contact-exchange-requests",
+        tags=["contacts"],
+        response_model=Envelope[ContactExchangeRequestData],
+    )
+    def create_contact_exchange_request(
+        payload: ContactExchangeCreateRequest,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ):
+        enforce_rate_limit("contact.exchange", user_id, request)
+        exchange_request = app_store.create_contact_exchange_request(
+            user_id, payload.projectId, payload.roleId
+        )
+        return envelope(request, exchange_request.model_dump(mode="json"))
+
+    @api.get(
+        "/me/contact-exchange-requests",
+        tags=["contacts"],
+        response_model=Envelope[list[ContactExchangeRequestData]],
+    )
+    def list_contact_exchange_requests(
+        request: Request,
+        user_id: str = Depends(current_user),
+        box: str = Query(pattern="^(SENT|RECEIVED)$"),
+        limit: int = Query(default=20, ge=1, le=50),
+        cursor: str | None = Query(default=None, max_length=512),
+    ):
+        requests, next_cursor = app_store.list_contact_exchange_requests(
+            user_id, box, limit, cursor
+        )
+        return envelope(
+            request,
+            [item.model_dump(mode="json") for item in requests],
+            {"nextCursor": next_cursor, "hasMore": next_cursor is not None},
+        )
+
+    @api.post(
+        "/contact-exchange-requests/{exchange_request_id}/accept",
+        tags=["contacts"],
+        response_model=Envelope[ContactExchangeRequestData],
+    )
+    def accept_contact_exchange_request(
+        exchange_request_id: str,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ):
+        exchange_request = app_store.accept_contact_exchange_request(
+            user_id, exchange_request_id
+        )
+        return envelope(request, exchange_request.model_dump(mode="json"))
+
+    @api.post(
+        "/contact-exchange-requests/{exchange_request_id}/reject",
+        tags=["contacts"],
+        response_model=Envelope[ContactExchangeRequestData],
+    )
+    def reject_contact_exchange_request(
+        exchange_request_id: str,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ):
+        exchange_request = app_store.reject_contact_exchange_request(
+            user_id, exchange_request_id
+        )
+        return envelope(request, exchange_request.model_dump(mode="json"))
+
+    @api.post(
+        "/contact-exchange-requests/{exchange_request_id}/cancel",
+        tags=["contacts"],
+        response_model=Envelope[ContactExchangeRequestData],
+    )
+    def cancel_contact_exchange_request(
+        exchange_request_id: str,
+        request: Request,
+        user_id: str = Depends(current_user),
+    ):
+        exchange_request = app_store.cancel_contact_exchange_request(
+            user_id, exchange_request_id
+        )
+        return envelope(request, exchange_request.model_dump(mode="json"))
+
     @api.post("/invitations", tags=["team"], response_model=Envelope[InvitationData])
     def create_invitation(
         payload: InvitationCreateRequest,
@@ -249,6 +359,25 @@ def make_app(
             payload.inviteeUserId,
         )
         return envelope(request, invitation.model_dump(mode="json"))
+
+    @api.get(
+        "/me/invitations",
+        tags=["team"],
+        response_model=Envelope[list[InvitationSummaryData]],
+    )
+    def list_invitations(
+        request: Request,
+        user_id: str = Depends(current_user),
+        box: str = Query(pattern="^(SENT|RECEIVED)$"),
+        limit: int = Query(default=20, ge=1, le=50),
+        cursor: str | None = Query(default=None, max_length=512),
+    ):
+        invitations, next_cursor = app_store.list_invitations(user_id, box, limit, cursor)
+        return envelope(
+            request,
+            [item.model_dump(mode="json") for item in invitations],
+            {"nextCursor": next_cursor, "hasMore": next_cursor is not None},
+        )
 
     @api.post(
         "/invitations/{invitation_id}/accept",

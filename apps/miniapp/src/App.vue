@@ -7,7 +7,7 @@ onLaunch(() => undefined);
 <style>
 page {
   min-height: 100%;
-  background: #f4f7f5;
+  background: #f6f8f7;
   color: #17231e;
   font-family: Inter, "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 28rpx;
@@ -25,6 +25,8 @@ scroll-view {
 
 button {
   margin: 0;
+  transition: background-color 160ms ease, border-color 160ms ease, color 160ms ease,
+    transform 160ms ease;
 }
 
 button::after {
@@ -33,7 +35,7 @@ button::after {
 
 .page-shell {
   min-height: 100vh;
-  padding: 0 32rpx calc(176rpx + env(safe-area-inset-bottom));
+  padding: 0 28rpx calc(176rpx + env(safe-area-inset-bottom));
 }
 
 .page-shell--task {
@@ -42,13 +44,13 @@ button::after {
 
 .page-content {
   width: 100%;
-  max-width: 960rpx;
+  max-width: 900rpx;
   margin: 0 auto;
 }
 
 .section {
-  padding: 34rpx 0;
-  border-top: 1rpx solid #dce4df;
+  padding: 38rpx 0;
+  border-top: 1rpx solid #dfe6e2;
 }
 
 .section:first-child {
@@ -59,29 +61,30 @@ button::after {
   display: block;
   margin: 0;
   color: #17231e;
-  font-size: 34rpx;
+  font-size: 32rpx;
   font-weight: 700;
-  line-height: 1.35;
+  line-height: 1.4;
 }
 
 .section-copy {
   display: block;
-  margin-top: 10rpx;
-  color: #607069;
-  font-size: 25rpx;
-  line-height: 1.6;
+  margin-top: 8rpx;
+  color: #69776f;
+  font-size: 24rpx;
+  line-height: 1.55;
 }
 
 .field {
-  margin-top: 28rpx;
+  margin-top: 30rpx;
 }
 
 .field-label {
   display: block;
-  margin-bottom: 12rpx;
+  margin-bottom: 14rpx;
   color: #2b3933;
-  font-size: 25rpx;
+  font-size: 24rpx;
   font-weight: 600;
+  line-height: 1.4;
 }
 
 .field-hint,
@@ -103,7 +106,7 @@ button::after {
 .text-input,
 .text-area {
   width: 100%;
-  border: 1rpx solid #cfd9d3;
+  border: 1rpx solid #c7d3cd;
   border-radius: 8rpx;
   background: #ffffff;
   color: #17231e;
@@ -111,19 +114,19 @@ button::after {
 }
 
 .text-input {
-  height: 88rpx;
+  height: 92rpx;
   padding: 0 24rpx;
 }
 
 .text-area {
-  min-height: 192rpx;
-  padding: 20rpx 24rpx;
+  min-height: 200rpx;
+  padding: 22rpx 24rpx;
   line-height: 1.55;
 }
 
 .text-input:focus,
 .text-area:focus {
-  border-color: #16815e;
+  border-color: #12664f;
   box-shadow: 0 0 0 4rpx rgba(22, 129, 94, 0.12);
 }
 
@@ -131,16 +134,25 @@ button::after {
 .secondary-button,
 .text-button,
 .danger-button {
-  min-height: 88rpx;
+  display: inline-flex;
+  min-height: 92rpx;
+  align-items: center;
+  justify-content: center;
+  gap: 12rpx;
   border-radius: 8rpx;
   font-size: 28rpx;
   font-weight: 700;
-  line-height: 88rpx;
+  line-height: 1.2;
 }
 
 .primary-button {
   background: #12664f;
   color: #ffffff;
+}
+
+.primary-button:active {
+  background: #0e5743;
+  transform: translateY(1rpx);
 }
 
 .primary-button[disabled] {
@@ -154,11 +166,15 @@ button::after {
   color: #244038;
 }
 
+.secondary-button:active,
+.text-button:active {
+  background: #eef4f1;
+}
+
 .text-button {
-  min-height: 72rpx;
+  min-height: 76rpx;
   background: transparent;
   color: #12664f;
-  line-height: 72rpx;
 }
 
 .danger-button {
@@ -169,8 +185,8 @@ button::after {
 
 .button-row {
   display: flex;
-  gap: 16rpx;
-  margin-top: 34rpx;
+  gap: 18rpx;
+  margin-top: 32rpx;
 }
 
 .button-row button {
@@ -178,14 +194,14 @@ button::after {
 }
 
 .surface {
-  border: 1rpx solid #dbe3df;
+  border: 1rpx solid #d8e2dd;
   border-radius: 8rpx;
   background: #ffffff;
 }
 
 .divider {
   height: 1rpx;
-  background: #dce4df;
+  background: #dfe6e2;
 }
 
 .visually-hidden {

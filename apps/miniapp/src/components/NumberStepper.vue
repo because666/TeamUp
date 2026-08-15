@@ -36,37 +36,42 @@ function change(delta: number): void {
 .number-stepper {
   display: grid;
   width: 100%;
-  max-width: 360rpx;
-  height: 80rpx;
+  max-width: 372rpx;
+  height: 88rpx;
   overflow: hidden;
-  border: 1rpx solid #cbd6d0;
+  border: 1rpx solid #bfd0c8;
   border-radius: 8rpx;
   background: #ffffff;
-  grid-template-columns: 80rpx 1fr 80rpx;
+  grid-template-columns: 88rpx minmax(0, 1fr) 88rpx;
 }
 
 .number-stepper__button {
   display: flex;
-  min-height: 80rpx;
+  min-height: 88rpx;
   align-items: center;
   justify-content: center;
   border-radius: 0;
-  background: #f4f7f5;
+  background: #f4f8f6;
   line-height: 1;
+}
+
+.number-stepper__button:active {
+  background: #e4efe9;
 }
 
 .number-stepper__value {
   display: flex;
+  min-width: 0;
   align-items: baseline;
   justify-content: center;
-  gap: 7rpx;
-  border-right: 1rpx solid #dce4df;
-  border-left: 1rpx solid #dce4df;
+  gap: 8rpx;
+  border-right: 1rpx solid #dfe6e2;
+  border-left: 1rpx solid #dfe6e2;
 }
 
 .number-stepper__number {
   color: #17231e;
-  font-size: 29rpx;
+  font-size: 30rpx;
   font-weight: 800;
 }
 

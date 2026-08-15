@@ -22,4 +22,23 @@ describe("service error presentation", () => {
     expect(result.description).not.toContain("database");
     expect(result.kind).toBe("network_error");
   });
+
+  it("keeps blocked-contact errors distinct from version conflicts", () => {
+    const result = presentError(new AppServiceError("USER_BLOCKED", "服务端阻止交换", 409, "req_blocked"));
+
+    expect(result.kind).toBe("forbidden");
+    expect(result.title).toBe("当前无法联系项目组织者");
+  });
+
+  it("guides users to contact settings when their private card is missing", () => {
+    const result = presentError(new AppServiceError(
+      "CONTACT_CARD_REQUIRED",
+      "contact value must stay private",
+      409,
+      "req_contact",
+    ));
+
+    expect(result.title).toBe("请先填写联系方式");
+    expect(result.description).not.toContain("contact value");
+  });
 });
