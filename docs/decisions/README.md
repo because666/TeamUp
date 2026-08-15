@@ -2,7 +2,7 @@
 
 > Status: Confirmed<br>
 > Owner: 角色 A / 角色 B<br>
-> Last Updated: 2026-08-11
+> Last Updated: 2026-08-15
 
 ADR 用于保存会跨任务、跨会话影响实现的重要决定。聊天中的同意必须转写为 ADR 才能成为长期项目真值。
 
@@ -22,5 +22,6 @@ ADR 用于保存会跨任务、跨会话影响实现的重要决定。聊天中�
 | [ADR-0003](ADR-0003-two-person-ai-workflow.md) | 双人 AI 与 Git 协作协议 | Proposed | 双方 |
 | [ADR-0004](ADR-0004-mysql-data-access.md) | MySQL 数据访问与迁移工具 | Accepted | 角色 B，角色 A评审 |
 | [ADR-0005](ADR-0005-matching-api-data-contract.md) | 匹配 API 与数据契约 | Proposed | 角色 A / 角色 B |
+| [ADR-0006](ADR-0006-cloudbase-runtime-evaluation.md) | CloudBase 低成本运行方案评估 | Proposed | 角色 B，角色 A提出产品成本要求 |
 
 新增决策时复制 [ADR 模板](ADR-TEMPLATE.md)，编号只增不复用。状态变化保留原始背景、备选方案和影响。

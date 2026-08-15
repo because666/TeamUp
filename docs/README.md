@@ -2,7 +2,7 @@
 
 > Status: Confirmed<br>
 > Owner: 角色 A / 角色 B<br>
-> Last Updated: 2026-08-14
+> Last Updated: 2026-08-15
 
 本目录是 TeamUp 的版本化项目知识库。AI 应根据任务类型读取对应入口，不应无选择地加载所有文件。
 
@@ -27,6 +27,7 @@
 
 - [产品概要](product/PRODUCT_BRIEF.md)：定位、用户、价值和成功指标。
 - [产品需求文档](product/PRD.md)：功能编号、业务规则和验收标准。
+- [品牌头像与生成素材规范](product/BRAND_ASSETS.md)：小程序头像的 AI 提示词、来源约束和验收登记。
 - [后端产品需求文档](product/BACKEND_PRD.md)：FastAPI 后端功能、权限、数据、测试和分阶段交付要求。
 - [MVP 范围](product/MVP_SCOPE.md)：P0/P1、非目标和发布门槛。
 - [用户流程](product/USER_FLOWS.md)：首条 P0 纵向切片及失败、恢复和退出路径。
@@ -57,6 +58,7 @@
 ## 决策与状态
 
 - [ADR 索引](decisions/README.md)：已接受和待确认的关键决策。
+- [CloudBase 低成本运行方案评估](decisions/ADR-0006-cloudbase-runtime-evaluation.md)：保留 FastAPI/MySQL 前提下的部署方案提案。
 - [当前状态](status/CURRENT.md)：`main` 分支唯一聚合状态。
 - [任务目录](status/tasks/README.md)：各分支独立任务状态。
 - [角色 B 文档与技术基线评审](status/reviews/TUP-20260810-role-b-review.md)：无需 PR 的核对范围、Codex 提示词和结论模板。
