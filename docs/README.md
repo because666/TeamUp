@@ -2,7 +2,7 @@
 
 > Status: Confirmed<br>
 > Owner: 角色 A / 角色 B<br>
-> Last Updated: 2026-08-15
+> Last Updated: 2026-08-16
 
 本目录是 TeamUp 的版本化项目知识库。AI 应根据任务类型读取对应入口，不应无选择地加载所有文件。
 
@@ -28,6 +28,7 @@
 - [产品概要](product/PRODUCT_BRIEF.md)：定位、用户、价值和成功指标。
 - [产品需求文档](product/PRD.md)：功能编号、业务规则和验收标准。
 - [品牌头像与生成素材规范](product/BRAND_ASSETS.md)：小程序头像的 AI 提示词、来源约束和验收登记。
+- [微信主体、类目与发布准备](product/WECHAT_RELEASE_READINESS.md)：个人/非个人主体边界、类目证据和正式发布前置事项。
 - [后端产品需求文档](product/BACKEND_PRD.md)：FastAPI 后端功能、权限、数据、测试和分阶段交付要求。
 - [MVP 范围](product/MVP_SCOPE.md)：P0/P1、非目标和发布门槛。
 - [用户流程](product/USER_FLOWS.md)：首条 P0 纵向切片及失败、恢复和退出路径。
@@ -77,6 +78,7 @@
 - [前端真实 API adapter 角色 A 评审](status/reviews/TUP-20260814-frontend-api-adapter-review.md)：角色 A 对微信登录、真实 API 模式和前端错误状态的评审入口。
 - [项目 PUT 兼容角色 A 评审](status/reviews/TUP-20260814-project-put-compat-review.md)：角色 A 对微信请求方法兼容与项目更新语义的评审入口。
 - [P0 前后端集成角色 A 评审](status/reviews/TUP-20260814-p0-integration-review.md)：组合分支的测试、构建、联调与剩余环境风险评审入口。
+- [CloudBase 云托管传输角色 B 评审](status/reviews/TUP-20260815-cloudbase-transport-review.md)：CloudBase 传输、FastAPI 容器、MySQL、安全与成本评审入口。
 - [任务模板](status/templates/TASK_TEMPLATE.md)、[交接模板](status/templates/HANDOFF_TEMPLATE.md) 和 [模型发布模板](status/templates/MODEL_RELEASE_TEMPLATE.md)。
 
 ## 历史来源

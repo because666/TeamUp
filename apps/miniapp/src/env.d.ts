@@ -3,6 +3,10 @@
 interface ImportMetaEnv {
   readonly MODE: "fixture" | string;
   readonly VITE_API_BASE_URL?: string;
+  readonly VITE_API_TRANSPORT?: "http" | "cloudbase" | string;
+  readonly VITE_CLOUDBASE_ENV_ID?: string;
+  readonly VITE_CLOUDBASE_SERVICE?: string;
+  readonly VITE_CLOUDBASE_API_PREFIX?: string;
 }
 
 interface ImportMeta {

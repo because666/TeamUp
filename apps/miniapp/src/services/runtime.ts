@@ -1,9 +1,65 @@
 export type RuntimeMode = "fixture" | "api";
+export type ApiTransportMode = "http" | "cloudbase";
+
+export interface CloudbaseRuntimeConfig {
+  envId: string;
+  serviceName: string;
+  apiPrefix: string;
+}
 
 export const runtimeMode: RuntimeMode = import.meta.env.MODE === "fixture" ? "fixture" : "api";
 
 export const isFixtureMode = (): boolean => runtimeMode === "fixture";
 export const isApiMode = (): boolean => runtimeMode === "api";
+
+export function apiTransportMode(): ApiTransportMode {
+  const value = import.meta.env.MODE === "cloudbase"
+    ? "cloudbase"
+    : String(import.meta.env.VITE_API_TRANSPORT || "http").trim().toLowerCase();
+  if (value !== "http" && value !== "cloudbase") {
+    throw new AppServiceError(
+      "BACKEND_NOT_CONFIGURED",
+      "接口传输方式配置无效，请检查 VITE_API_TRANSPORT。",
+      503,
+    );
+  }
+  return value;
+}
+
+export function cloudbaseRuntimeConfig(): CloudbaseRuntimeConfig {
+  const envId = String(import.meta.env.VITE_CLOUDBASE_ENV_ID || "").trim();
+  const serviceName = String(import.meta.env.VITE_CLOUDBASE_SERVICE || "").trim();
+  const apiPrefix = String(import.meta.env.VITE_CLOUDBASE_API_PREFIX || "/api/v1")
+    .trim()
+    .replace(/\/$/, "");
+  if (!envId || !serviceName) {
+    throw new AppServiceError(
+      "CLOUDBASE_NOT_CONFIGURED",
+      "微信云托管尚未配置环境和服务名称。",
+      503,
+    );
+  }
+  if (
+    envId.length > 128
+    || serviceName.length > 128
+    || /[\s/\\?#]/.test(envId)
+    || /[\s/\\?#]/.test(serviceName)
+  ) {
+    throw new AppServiceError(
+      "CLOUDBASE_CONFIG_INVALID",
+      "微信云托管环境或服务名称格式无效。",
+      503,
+    );
+  }
+  if (!apiPrefix.startsWith("/") || /[?#]/.test(apiPrefix)) {
+    throw new AppServiceError(
+      "CLOUDBASE_CONFIG_INVALID",
+      "微信云托管 API 前缀格式无效。",
+      503,
+    );
+  }
+  return { envId, serviceName, apiPrefix };
+}
 
 export function apiBaseUrl(): string {
   const value = String(import.meta.env.VITE_API_BASE_URL || "").trim().replace(/\/$/, "");

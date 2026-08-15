@@ -49,6 +49,17 @@
 - 在角色 B 完成 Option B 的技术与成本核验前，CloudBase 环境不得被声明为 P0 生产后端，客户端不得直连云数据库；
 - 任何云函数/云数据库重写、公开部署、域名配置、真实微信凭证配置、数据库迁移或付费资源启用都需要独立任务、Role B 评审和本 ADR 变为 `Accepted`。
 
+## Feasibility Evidence
+
+CloudBase 官方文档于 2026-08-15 核对结果：
+
+- [FastAPI](https://docs.cloudbase.net/run/develop/languages-frameworks/fastapi)：云托管支持以容器方式部署 FastAPI，示例监听 `0.0.0.0:80`；
+- [微信小程序调用云托管](https://docs.cloudbase.net/run/develop/access/mini)：已关联环境的小程序可使用 `wx.cloud.callContainer`，仅由小程序调用时无需配置服务器域名；
+- [MySQL 数据库集成](https://docs.cloudbase.net/run/develop/resource-integration/mysql)：云托管可以通过内网连接云开发或腾讯云 MySQL，也可连接公网 MySQL；生产建议内网；
+- [计费相关](https://docs.cloudbase.net/run/faq/fee)：云托管按实例 CPU 与内存使用计量，微信云托管按日结算，云开发中的云托管按环境套餐、资源包和按量方式扣量。
+
+上述证据证明 Option B 技术上可继续验证，但不能证明具体账号存在免费额度，也不构成成本或生产部署批准。
+
 ## Consequences
 
 - 正面影响：可以继续完成小程序后台基础信息、头像、开发者成员和开发工具导入，同时不牺牲已有后端投入。

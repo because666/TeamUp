@@ -47,6 +47,8 @@ def get_settings() -> Settings:
         raise ValueError("TEAMUP_STORE_BACKEND must be memory or mysql")
     if store_backend == "mysql" and not database_url:
         raise ValueError("TEAMUP_DATABASE_URL is required when TEAMUP_STORE_BACKEND=mysql")
+    if environment in {"staging", "production"} and store_backend != "mysql":
+        raise ValueError("TEAMUP_STORE_BACKEND must be mysql in staging and production")
     if database_url and not database_url.startswith("mysql+pymysql://"):
         raise ValueError("TEAMUP_DATABASE_URL must use the mysql+pymysql driver")
     return Settings(

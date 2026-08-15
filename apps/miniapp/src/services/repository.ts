@@ -29,10 +29,9 @@ import {
   validateProfile,
   validateProject,
 } from "@/domain/validation";
-import { apiBaseUrl, AppServiceError, isFixtureMode } from "./runtime";
+import { AppServiceError, isFixtureMode } from "./runtime";
 import { apiSessionStorage, fixtureStorage } from "./storage";
-
-type ApiMethod = "GET" | "POST" | "PUT";
+import { sendApiRequest, type ApiMethod } from "./transport";
 
 interface ApiResponse<T> {
   data: T;
@@ -95,43 +94,28 @@ function appErrorFromResponse(statusCode: number, body: unknown): AppServiceErro
   return new AppServiceError(code, message, statusCode || 503, requestId);
 }
 
-function request<T>(path: string, method: ApiMethod, data?: unknown, authenticated = true): Promise<ApiResponse<T>> {
+async function request<T>(
+  path: string,
+  method: ApiMethod,
+  data?: unknown,
+  authenticated = true,
+): Promise<ApiResponse<T>> {
   const session = authenticated ? apiSessionStorage.read() : null;
   const header: Record<string, string> = { "Content-Type": "application/json" };
   if (session?.accessToken) header.Authorization = `Bearer ${session.accessToken}`;
 
-  return new Promise((resolve, reject) => {
-    let baseUrl: string;
-    try {
-      baseUrl = apiBaseUrl();
-    } catch (error) {
-      reject(error);
-      return;
-    }
-
-    uni.request({
-      url: `${baseUrl}${path}`,
-      method,
-      data: data as UniApp.RequestOptions["data"],
-      header,
-      timeout: 10000,
-      success: (response) => {
-        const body = asRecord(response.data);
-        const requestId = asString(body.requestId, "remote_request");
-        if (response.statusCode >= 200 && response.statusCode < 300 && "data" in body) {
-          resolve({
-            data: body.data as T,
-            meta: body.meta as Record<string, unknown> | undefined,
-            requestId,
-          });
-          return;
-        }
-        if (response.statusCode === 401) apiSessionStorage.clear();
-        reject(appErrorFromResponse(response.statusCode, response.data));
-      },
-      fail: () => reject(new AppServiceError("NETWORK_ERROR", "暂时无法连接服务，请检查网络后重试。", 503)),
-    });
-  });
+  const response = await sendApiRequest({ path, method, data, header });
+  const body = asRecord(response.data);
+  const requestId = asString(body.requestId, "remote_request");
+  if (response.statusCode >= 200 && response.statusCode < 300 && "data" in body) {
+    return {
+      data: body.data as T,
+      meta: body.meta as Record<string, unknown> | undefined,
+      requestId,
+    };
+  }
+  if (response.statusCode === 401) apiSessionStorage.clear();
+  throw appErrorFromResponse(response.statusCode, response.data);
 }
 
 function getWechatCode(): Promise<string> {

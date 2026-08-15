@@ -139,6 +139,37 @@ describe("API repository", () => {
     expect(storage.has("teamup.api.session.v1")).toBe(false);
   });
 
+  it("preserves authentication handling through the CloudBase transport", async () => {
+    vi.stubEnv("MODE", "cloudbase");
+    vi.stubEnv("VITE_CLOUDBASE_ENV_ID", "teamup-dev-01");
+    vi.stubEnv("VITE_CLOUDBASE_SERVICE", "teamup-api");
+    const storage = new Map<string, unknown>([[
+      "teamup.api.session.v1",
+      { accessToken: "expired_access", userId: "usr_01" },
+    ]]);
+    installUniMock(() => undefined, storage);
+    const callContainer = vi.fn().mockResolvedValue({
+      statusCode: 401,
+      data: { error: { code: "AUTH_REQUIRED", message: "请重新登录。" }, requestId: "req_cloud_401" },
+    });
+    vi.stubGlobal("wx", { cloud: { init: vi.fn(), callContainer } });
+    const { repository } = await import("./repository");
+
+    await expect(repository.getProfile()).rejects.toMatchObject({
+      status: 401,
+      requestId: "req_cloud_401",
+    });
+    expect(storage.has("teamup.api.session.v1")).toBe(false);
+    expect(callContainer).toHaveBeenCalledWith(expect.objectContaining({
+      path: "/api/v1/me/profile",
+      method: "GET",
+      header: expect.objectContaining({
+        Authorization: "Bearer expired_access",
+        "X-WX-SERVICE": "teamup-api",
+      }),
+    }));
+  });
+
   it("uses POST for a new project and WeChat-compatible PUT with version for an existing project", async () => {
     vi.stubEnv("VITE_API_BASE_URL", "https://api.teamup.test/api/v1");
     const methods: Array<{ method: string; data: unknown }> = [];

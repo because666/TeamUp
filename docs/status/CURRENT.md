@@ -3,7 +3,7 @@
 > Status: Confirmed<br>
 > Snapshot Branch: `main`<br>
 > Remote Baseline: `167edd5`<br>
-> Last Updated: 2026-08-15 by 角色 A（界面精修任务）
+> Last Updated: 2026-08-16 by 角色 A（CloudBase 技术验证任务）
 
 本文件只记录已合并或正在明确交接的聚合状态，不记录逐步开发日志。单个任务的实时进展见 `tasks/`。
 
@@ -22,7 +22,7 @@
 | 前端工程 | Ready for review | 任务分支已完成 UniApp P0 页面、fixture、真实 API adapter、测试与构建；尚未集成 `main` |
 | 后端工程 | Ready for review | FastAPI、MySQL/Alembic、认证、项目、匹配、协作、安全与可观测性堆叠任务已实现并验证；尚未集成 `main` |
 | P0 前后端集成 | Ready for review | 独立集成分支已完成两端测试、构建、OpenAPI 契约检查和本地 HTTP smoke，等待角色 A 评审 |
-| 部署环境 | Not started | 腾讯云方向已知，具体拓扑未确定 |
+| 部署环境 | Technical spike | CloudBase 云托管传输与 FastAPI 容器材料已进入非默认验证；未创建云资源或确定生产拓扑 |
 
 ## 3. 活跃任务
 
@@ -35,6 +35,7 @@
 | TUP-20260811-fastapi-backend | 角色 B | FastAPI 框架决策、完整后端 PRD 与后端基线 | In Progress | `role-b/feature/TUP-20260811-fastapi-backend` | [任务记录](tasks/TUP-20260811-fastapi-backend.md) |
 | TUP-20260811-frontend-foundation | 角色 A | UniApp 微信小程序工程与 P0 页面骨架 | Ready for Review | `role-a/feature/TUP-20260811-frontend-foundation` | [任务记录](tasks/TUP-20260811-frontend-foundation.md) |
 | TUP-20260815-ui-refinement | 角色 A | 小程序 P0 界面精修、联系方式交换与邀请中心 | Ready for Review | `role-a/feature/TUP-20260815-ui-refinement` | [任务记录](tasks/TUP-20260815-ui-refinement.md) |
+| TUP-20260815-cloudbase-transport | 角色 A（跨角色技术验证） | CloudBase 云托管传输与 FastAPI 容器验证 | In Progress | `role-a/feature/TUP-20260815-cloudbase-transport` | [任务记录](tasks/TUP-20260815-cloudbase-transport.md) |
 | TUP-20260811-match-v0-1 | 角色 B | 可解释规则匹配引擎与 golden tests | Ready for Review | `role-b/feature/TUP-20260811-match-v0-1` | [任务记录](tasks/TUP-20260811-match-v0-1.md) |
 | TUP-20260811-match-api-data-contract | 角色 B | 匹配 API、分页与数据扩展契约 | Ready for Review | `role-b/docs/TUP-20260811-match-api-data-contract` | [任务记录](tasks/TUP-20260811-match-api-data-contract.md) |
 | TUP-20260812-match-preferences | 角色 B | 匹配偏好与岗位匹配字段 | Ready for Review | `role-b/feature/TUP-20260812-match-preferences` | [任务记录](tasks/TUP-20260812-match-preferences.md) |
@@ -57,6 +58,7 @@
 | [ADR-0003](../decisions/ADR-0003-two-person-ai-workflow.md) | 双人 AI/Git 协作协议 | 双方 | 规范从 Proposed 变为 Accepted |
 | [ADR-0004](../decisions/ADR-0004-mysql-data-access.md) | MySQL 数据访问与迁移 | 角色 B，角色 A评审 | 状态：Accepted；生产拓扑和备份策略仍需部署任务确认 |
 | [ADR-0005](../decisions/ADR-0005-matching-api-data-contract.md) | 匹配 API 与数据扩展 | 双方 | 状态：Proposed；已授权的任务实现不等于 ADR 已通过评审 |
+| [ADR-0006](../decisions/ADR-0006-cloudbase-runtime-evaluation.md) | CloudBase 低成本运行方案 | 角色 B决策，角色 A提出成本要求 | 状态：Proposed；技术验证不授权部署或付费 |
 
 ## 5. 已知阻塞与风险
 

@@ -2,7 +2,7 @@
 
 > Status: Proposed<br>
 > Owner: 角色 A / 角色 B<br>
-> Last Updated: 2026-08-14
+> Last Updated: 2026-08-16
 
 ## 1. 当前说明
 
@@ -30,12 +30,14 @@
 | 微信合约模拟开发 | `npm run dev:mp-weixin` | `fixture`；导入 `dist/dev/mp-weixin` |
 | H5 真实接口模式 | `npm run dev:h5:api` | API 未接入时明确返回 `BACKEND_NOT_CONFIGURED` |
 | 微信真实接口模式 | `npm run dev:mp-weixin:api` | API 未接入时不模拟成功 |
+| 微信 CloudBase 技术验证 | `npm run dev:mp-weixin:cloudbase` | 使用本地未提交的 CloudBase 环境与服务配置 |
 | 类型检查 | `npm run type-check` | `vue-tsc --noEmit` |
 | 单元测试 | `npm test` | Vitest；当前覆盖校验、fixture 来源和错误映射 |
 | H5 演示构建 | `npm run build:demo:h5` | `fixture`，不得作为生产包 |
 | 微信演示构建 | `npm run build:demo:mp-weixin` | `fixture`，导入 `dist/build/mp-weixin` |
 | H5 生产检查 | `npm run build:h5` | 不启用 fixture |
 | 微信生产检查 | `npm run build:mp-weixin` | 不启用 fixture；导入 `dist/build/mp-weixin` |
+| 微信 CloudBase 构建检查 | `npm run build:mp-weixin:cloudbase` | 非默认技术验证；导入 `dist/build/mp-weixin` |
 
 微信开发者工具中使用测试 AppID 或团队分配的开发 AppID；真实 AppID 不写入共享仓库。`manifest.json` 当前保持空 AppID，并关闭本地演示的 URL 校验，发布前必须由角色 B 按环境与域名白名单复核。
 
@@ -69,7 +71,17 @@ docs/
 - 微信开发者工具和小程序后台必须把 API 域名配置为 request 合法域名，开发/生产 AppID、微信密钥和平台签名密钥不得写入前端环境文件；
 - access token 仅由 services 层读取并放入 `Authorization: Bearer`，页面不得解析 token；成功退出后清理本地平台会话。
 
-### 4.2 共享配置边界
+### 4.2 CloudBase 技术验证模式
+
+- `cloudbase` 构建模式继续调用现有 `/api/v1` FastAPI 契约，只将传输从 `uni.request` 切换为 `wx.cloud.callContainer`；
+- 本地未提交配置必须提供 `VITE_CLOUDBASE_ENV_ID` 和 `VITE_CLOUDBASE_SERVICE`，`VITE_CLOUDBASE_API_PREFIX` 默认 `/api/v1`；
+- 环境 ID 与服务名属于客户端可见配置，不是密钥，但仍按环境注入，避免把开发/生产资源混用；
+- AppSecret、数据库连接串和平台签名密钥仍只能放在云托管服务端配置中；
+- 页面不得直接调用 `wx.cloud.callContainer` 或云数据库，所有调用继续经过 `src/services/`；
+- CloudBase 模式缺少配置或运行在非微信环境时必须显式失败，不回退 fixture 或伪造成功；
+- 本模式是 ADR-0006 的技术验证，不代表已批准部署、付费或正式切换运行拓扑。
+
+### 4.3 共享配置边界
 
 - 仓库提供 `.env.example`，只放变量名和无敏感示例；
 - 本地 `.env*`、证书、密钥和真实连接信息不得提交；
@@ -168,3 +180,24 @@ python -m pytest -ra
 ```
 
 未配置 `TEAMUP_TEST_MYSQL_URL` 时，MySQL 专属测试会显示为 skipped；SQLite 仓储与迁移测试仍会执行，但不能替代真实 MySQL 验证。
+
+## 11. CloudBase FastAPI 容器技术验证
+
+`services/api/Dockerfile` 只用于本地构建和 CloudBase 云托管可行性评审。它继续启动 `app.main:app`，监听容器端口 80，并以 `/api/v1/health/ready` 作为容器健康检查。
+
+在 `services/api` 执行本地构建：
+
+```powershell
+docker build -t teamup-api:cloudbase-spike .
+```
+
+CloudBase staging/production 必须至少配置：
+
+- `TEAMUP_ENVIRONMENT=staging|production`；
+- `TEAMUP_STORE_BACKEND=mysql`；
+- 服务端 MySQL 连接串和微信 AppID/AppSecret；
+- 关闭本地替代登录。
+
+示例变量名见 `services/api/cloudbase.env.example`，其中所有值均为占位符。应用会拒绝 staging/production 使用内存存储。数据库迁移必须作为独立受控步骤执行，不在每个容器实例启动时自动运行。
+
+当前只允许本地镜像构建和启动检查。镜像推送、CloudBase 服务创建、MySQL 初始化、环境变量录入、流量开放和付费资源启用仍需 ADR-0006 接受、Role B 评审和当前用户明确授权。
